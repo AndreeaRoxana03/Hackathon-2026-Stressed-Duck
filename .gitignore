@@ -1,0 +1,7 @@
+.pio/
+.vscode/
+__pycache__/
+*.py[cod]
+
+# Keep directory placeholders if they are added later.
+!src/generated/.gitkeep
