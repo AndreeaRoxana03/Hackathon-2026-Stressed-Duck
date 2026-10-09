@@ -14,7 +14,7 @@ const DEFAULT_SUCCESS_COMMENT = "The agent completed its inspection. Details are
 const DEFAULT_FAILURE_COMMENT = "The Studio run failed. Details are in your editor.";
 const DEFAULT_ABORT_COMMENT = "The Studio run was cancelled.";
 const DEFAULT_CLARIFICATION_COMMENT = "Please speak what failed and what you expected.";
-const MAX_TOOL_LEGS = 8;
+const MAX_TOOL_LEGS = 16;
 const MAX_TOOL_CALLS = 32;
 const MAX_RESULT_TEXT = 160_000;
 const READ_ONLY_TOOLS = new Set(["read_file", "search_files", "git_diff"]);
@@ -26,6 +26,7 @@ export interface StudioAgentRunnerOptions {
   readonly toolExecutor?: WorkspaceToolExecutor;
   readonly context?: readonly { readonly description: string; readonly value: string }[];
   readonly onEvent?: (event: StudioEvent) => void;
+  readonly onActivity?: (activity: AgentActivity) => void;
   readonly maxToolLegs?: number;
   readonly maxToolCalls?: number;
   readonly workspaceRoot?: string;
@@ -244,10 +245,14 @@ export class StudioAgentRunner implements AgentRunner {
     const toolResults = new Map<string, StudioRunMessage>();
     const verification: string[] = [];
     const activity: AgentActivity[] = [];
+    const recordActivity = (entry: AgentActivity): void => {
+      activity.push(entry);
+      this.options.onActivity?.(entry);
+    };
 
     const outcome = (status: AgentRunStatus, comment: string, structured?: StructuredResponse): AgentOutcome => {
-      const proposals = status === "success" ? proposalList(this.options.toolExecutor) : [];
-      if (status !== "success") {
+      const proposals = status === "success" || status === "failure" ? proposalList(this.options.toolExecutor) : [];
+      if (status === "aborted" || status === "needs_clarification") {
         this.rejectProposals();
       }
       const result: AgentResult = {
@@ -277,7 +282,7 @@ export class StudioAgentRunner implements AgentRunner {
       rawArguments: string,
     ): Promise<StudioRunMessage> => {
       if (!this.options.toolExecutor) {
-        activity.push({ tool: toolName || "unknown", status: "failed", detail: "Local tool unavailable" });
+        recordActivity({ tool: toolName || "unknown", status: "failed", detail: "Local tool unavailable" });
         return {
           role: "tool",
           toolCallId,
@@ -291,13 +296,13 @@ export class StudioAgentRunner implements AgentRunner {
         args = rawArguments.trim() ? JSON.parse(rawArguments) : {};
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        activity.push({ tool: toolName || "unknown", status: "failed", detail: "Invalid arguments" });
+        recordActivity({ tool: toolName || "unknown", status: "failed", detail: "Invalid arguments" });
         return { role: "tool", toolCallId, content: `Invalid tool arguments: ${message}`, error: message };
       }
 
       const result: ToolExecutionResult = await this.options.toolExecutor.execute(toolName, args, controller.signal);
       const detail = toolActivityDetail(toolName, args);
-      activity.push({
+      recordActivity({
         tool: toolName || "unknown",
         status: result.error ? "failed" : "completed",
         ...(detail ? { detail } : {}),
@@ -320,7 +325,7 @@ export class StudioAgentRunner implements AgentRunner {
         }
         legs += 1;
         if (legs > (this.options.maxToolLegs ?? MAX_TOOL_LEGS)) {
-          return outcome("failure", "The agent used too many investigation steps.");
+          return outcome("failure", "The agent used too many investigation steps.", { explanation: "The investigation reached its step limit. Completed fixes are retained, but the diagnosis is incomplete.", verification: [] });
         }
 
         const calls = new Map<string, { readonly name: string; args: string }>();
