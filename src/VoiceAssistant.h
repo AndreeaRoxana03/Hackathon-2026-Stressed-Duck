@@ -9,12 +9,17 @@ class VoiceAssistant {
 public:
     using StatusCallback = void (*)(const char* text);
     void begin(StatusCallback) {}
-    void update() {}
+    void update(bool = false) {}
     void sayStressed() {}
     void sayHappy() {}
     void setIdleChatter(bool) {}
+    void setMuted(bool muted) { _muted = muted; }
+    bool isMuted() const { return _muted; }
     bool isSpeaking() const { return false; }
     bool isRecording() const { return false; }
+
+private:
+    bool _muted = false;
 };
 
 #else
@@ -25,13 +30,18 @@ class VoiceAssistant {
 public:
     using StatusCallback = void (*)(const char* text);
     void begin(StatusCallback onStatus);
-    void update();
+    // touchConsumed: this frame's touch already hit a button, so it must not trigger a [touch] line.
+    void update(bool touchConsumed = false);
     // Speaks a random line from the [stressed] section of speech.txt, interrupting any current clip.
     void sayStressed();
     // Speaks a random line from the [happy] section without needing a touch.
     void sayHappy();
-    // While enabled, speaks a random [happy] line every 20-60 s when nothing else is being said.
+    // Enabled only in the happy state: speaks a random [happy] line every 20-60 s and a [touch] line on each
+    // screen touch. While disabled, touches are ignored.
     void setIdleChatter(bool enabled);
+    // While muted nothing is spoken and any clip in progress is cut off.
+    void setMuted(bool muted);
+    bool isMuted() const { return _muted; }
     bool isSpeaking() const { return _speaking; }
     bool isRecording() const { return false; }
 
@@ -49,6 +59,7 @@ private:
     size_t _lastStressed = static_cast<size_t>(-1);
     size_t _lastHappy = static_cast<size_t>(-1);
     bool _chatter = false;
+    bool _muted = false;
     uint32_t _nextChatterMs = 0;
     bool _speaking = false;
 };
