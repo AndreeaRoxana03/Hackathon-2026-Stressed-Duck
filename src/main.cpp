@@ -277,7 +277,7 @@ void setDuckState(DuckState state) {
 
     voice.setIdleChatter(state == DUCK_HAPPY);
     voice.setWalking(state == DUCK_WALK);
-    if (state == DUCK_STRESSED && !backendControlled) {
+    if (state == DUCK_STRESSED) {
         voice.sayStressed();
     }
 
@@ -499,7 +499,7 @@ void loop() {
     processHostSerial();
     checkHostControlTimeout();
     if (backendControlled && hostMood == DUCK_STRESSED && currentState == DUCK_STRESSED &&
-        millis() - stressedSinceMs >= STRESSED_DURATION_MS) {
+        millis() - stressedSinceMs >= STRESSED_DURATION_MS && !voice.isSpeaking()) {
         setDuckState(DUCK_WALK);
     }
 
