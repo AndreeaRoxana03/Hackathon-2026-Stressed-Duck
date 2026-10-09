@@ -31,22 +31,12 @@ Replace `COM4` with the port shown by `python -m platformio device list`.
 
 - The duck starts in the happy state.
 - A table punch above the tuned vibration threshold switches to the stressed animation.
-- After 10 seconds without another punch, it switches to the smart duck state.
+- After 5 seconds, it switches to the smart duck state for 5 seconds, then returns to happy.
 - Buttons A, B, and C select happy, stressed, and smart states for testing.
 
-## Spoken lines from a text file
+The independent TypeScript host and VS Code client are in [duck-agent/README.md](duck-agent/README.md). The current firmware is still an offline demo: it emits `EVENT:FIST_SLAM` but does not yet parse host responses.
 
-Each touch of the screen makes the duck say a random line from the `[touch]` section of `src/speech.txt`. When the duck becomes stressed (a table punch, or button B), it says a random sarcastic line from the `[stressed]` section, interrupting anything it was saying. While the duck is happy, it says a random line from the `[happy]` section every 20-60 seconds. Blank lines and lines starting with `#` are skipped. The lines are pre-rendered on the PC with a natural neural voice and embedded in the firmware, so the board needs no Wi-Fi or backend. The status line under the mood label shows "Touch to hear the duck" or "Speaking...".
-
-Whenever `src/speech.txt` changes, regenerate the clips and upload again:
-
-```powershell
-python tools/speech_to_clips.py            # needs internet while running; writes src/generated/speech_clips.bin
-python tools/speech_to_clips.py --voice en-US-EricNeural --rate +5%   # other voice/speed
-python -m platformio run -t upload
-```
-
-The default voice is `en-GB-RyanNeural`. The clips are 16 kHz mono with leading and trailing silence trimmed, and use about 32 KB of flash per second of speech (the app partition is 6.5 MB, shared with the firmware). The desktop preview has no speaker data, so speech is disabled there.
+The host now supports focused-editor context, bounded Studio tool investigation, reviewable edits, cancellation/cooldown and an optional authenticated CoreS3 audio/transcription channel. Firmware receiver/backend mode, TTS, microphone capture and Wi-Fi pairing remain teammate-owned integration work. The shared contract and hardware verification gates are in [duck-agent/docs/firmware-integration.md](duck-agent/docs/firmware-integration.md).
 
 ## Source assets and generated files
 
