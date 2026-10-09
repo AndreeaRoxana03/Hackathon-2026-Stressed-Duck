@@ -10,7 +10,7 @@ ROWS = 3
 BACKGROUND_TOLERANCE = 16
 
 
-def remove_background(image: Image.Image) -> Image.Image:
+def remove_background(image: Image.Image, tolerance: int = BACKGROUND_TOLERANCE) -> Image.Image:
     image = image.convert("RGBA")
     mask = Image.new("L", image.size, 0)
     mask_draw = ImageDraw.Draw(mask)
@@ -24,7 +24,7 @@ def remove_background(image: Image.Image) -> Image.Image:
             continue
         visited.add((x, y))
         red, green, blue, _ = pixels[x, y]
-        if max(red, green, blue) - min(red, green, blue) > BACKGROUND_TOLERANCE:
+        if max(red, green, blue) - min(red, green, blue) > tolerance:
             continue
         mask_draw.point((x, y), fill=255)
         pending.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
@@ -38,6 +38,7 @@ def remove_background(image: Image.Image) -> Image.Image:
 def main() -> None:
     source = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("src/frames/happyDuckDance.jpg")
     output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("src/frames/happyDuck")
+    tolerance = int(sys.argv[3]) if len(sys.argv) > 3 else BACKGROUND_TOLERANCE
 
     if not source.exists():
         raise SystemExit(f"Sprite sheet not found: {source}")
@@ -54,7 +55,7 @@ def main() -> None:
             right = (col + 1) * cell_width
             bottom = (row + 1) * cell_height
             frame = image.crop((left, top, right, bottom))
-            frame = remove_background(frame)
+            frame = remove_background(frame, tolerance)
             frame_number = row * COLS + col + 1
             frame.save(output_dir / f"frame_{frame_number:02d}.png")
 

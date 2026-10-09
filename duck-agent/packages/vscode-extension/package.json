@@ -1,0 +1,61 @@
+{
+  "name": "stressed-duck",
+  "publisher": "stressed-ducks",
+  "displayName": "Stressed Duck",
+  "version": "0.1.0",
+  "private": true,
+  "description": "VS Code client for the independent Stressed Duck broker",
+  "type": "commonjs",
+  "main": "./dist/extension.js",
+  "engines": {
+    "vscode": ">=1.95.0"
+  },
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:stressedDuck.trigger",
+    "onCommand:stressedDuck.status",
+    "onCommand:stressedDuck.stop",
+    "onCommand:stressedDuck.clarify"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "stressedDuck.trigger",
+        "title": "Stressed Duck: Trigger"
+      },
+      {
+        "command": "stressedDuck.status",
+        "title": "Stressed Duck: Broker Status"
+      },
+      {
+        "command": "stressedDuck.stop",
+        "title": "Stressed Duck: Stop Run"
+      },
+      {
+        "command": "stressedDuck.clarify",
+        "title": "Stressed Duck: Listen for Clarification"
+      }
+    ],
+    "configuration": {
+      "title": "Stressed Duck",
+      "properties": {
+        "stressedDuck.brokerPipe": {
+          "type": "string",
+          "default": "\\\\.\\pipe\\stressed-duck",
+          "description": "Named pipe used by the Stressed Duck broker."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "package": "npm run build && vsce package --no-dependencies --allow-missing-repository --skip-license"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/vscode": "^1.95.0",
+    "@vscode/vsce": "^4.0.0",
+    "typescript": "^6.0.3"
+  }
+}

@@ -1,2 +1,4 @@
 Pillow>=10,<13
 platformio>=6.1,<7
+edge-tts>=7
+miniaudio>=1.6
