@@ -5,3 +5,8 @@ __pycache__/
 
 # Keep directory placeholders if they are added later.
 !src/generated/.gitkeep
+
+# Stressed Duck TypeScript dependencies and build artifacts.
+duck-agent/node_modules/
+duck-agent/**/dist/
+duck-agent/**/*.vsix
