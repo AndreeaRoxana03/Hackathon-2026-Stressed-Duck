@@ -1,6 +1,6 @@
 # Stressed Duck Agent
 
-This is an independent TypeScript host and VS Code extension for the Stressed Ducks project.
+This is an independent TypeScript host and VS Code extension for the Stressed Ducks project. 
 
 ## Current status
 
