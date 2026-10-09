@@ -310,7 +310,7 @@ export const WORKSPACE_TOOL_DEFINITIONS: readonly StudioToolDefinition[] = [
   },
   {
     name: "propose_edit",
-    description: "Create a reviewable exact-text edit proposal. This never writes the file; the user must accept it in VS Code.",
+    description: "Stage an exact-text fix for automatic application in VS Code after the run. Consecutive edits to a file are cumulative; reads return staged content. Line endings are normalized for matching. Use empty newText to delete text.",
     parameters: { type: "object", properties: { path: { type: "string" }, oldText: { type: "string" }, newText: { type: "string" } }, required: ["path", "oldText", "newText"] },
   },
 ];
@@ -341,6 +341,19 @@ export class WorkspaceToolHost implements WorkspaceToolExecutor {
     this.proposalSnapshots.clear();
   }
 
+  private async stagedContent(requestedPath: string): Promise<string> {
+    const current = await readWorkspaceFile(this.root, requestedPath);
+    const relative = normalizeRelativePath(this.root, requestedPath).relative;
+    const proposal = this.proposals.find((item) => item.path === relative);
+    if (!proposal) {
+      return current;
+    }
+    if (current !== proposal.baseText) {
+      throw new Error("The file changed during diagnosis; staged edits are stale.");
+    }
+    return proposal.newText;
+  }
+
   public async execute(name: string, rawArgs: unknown, signal?: AbortSignal): Promise<ToolExecutionResult> {
     try {
       signal?.throwIfAborted();
@@ -348,7 +361,7 @@ export class WorkspaceToolHost implements WorkspaceToolExecutor {
       switch (name) {
         case "read_file": {
           const requestedPath = stringArg(args, "path");
-          const content = await readWorkspaceFile(this.root, requestedPath);
+          const content = await this.stagedContent(requestedPath);
           const lines = content.split(/\r?\n/);
           const startLine = integerArg(args, "startLine", 1);
           const endLine = Math.min(lines.length, integerArg(args, "endLine", Math.min(lines.length, startLine + 199)));
@@ -370,20 +383,27 @@ export class WorkspaceToolHost implements WorkspaceToolExecutor {
           return await runAllowedCommand(this.root, args, signal);
         case "propose_edit": {
           const requestedPath = stringArg(args, "path");
-          const oldText = stringArg(args, "oldText");
-          const newText = stringArg(args, "newText");
+          const oldText = stringArg(args, "oldText").replace(/\r\n/g, "\n");
+          if (typeof args.newText !== "string") {
+            throw new Error("Argument 'newText' must be a string.");
+          }
+          const newText = args.newText.replace(/\r\n/g, "\n");
           const current = await readWorkspaceFile(this.root, requestedPath);
+          const staged = await this.stagedContent(requestedPath);
           signal?.throwIfAborted();
-          const occurrences = current.split(oldText).length - 1;
+          const normalized = staged.replace(/\r\n/g, "\n");
+          const occurrences = normalized.split(oldText).length - 1;
           if (occurrences !== 1) {
             throw new Error(`oldText must match exactly once; found ${occurrences} matches.`);
           }
           const relative = normalizeRelativePath(this.root, requestedPath).relative;
-          const proposal: EditProposal = { path: relative, oldText, newText, diff: makeDiff(relative, oldText, newText), baseText: current };
+          const replacement = normalized.replace(oldText, () => newText);
+          const updated = current.includes("\r\n") ? replacement.replace(/\n/g, "\r\n") : replacement;
+          const proposal: EditProposal = { path: relative, oldText: current, newText: updated, diff: makeDiff(relative, current, updated), baseText: current };
           this.proposals = [...this.proposals.filter((item) => item.path !== relative), proposal];
           this.lastProposal = proposal;
           this.proposalSnapshots.set(relative, current);
-          return { ...jsonResult(proposal), proposal };
+          return { ...jsonResult({ path: relative, staged: true, message: "Fix staged. Subsequent reads include this change; not yet applied or verified." }), proposal };
         }
         default:
           return errorResult(`Unknown local tool: ${name}`);
@@ -410,7 +430,7 @@ export class WorkspaceToolHost implements WorkspaceToolExecutor {
     if (occurrences !== 1 || current !== this.proposalSnapshots.get(proposal.path)) {
       throw new Error("The file changed since the proposal was created; the edit was not applied.");
     }
-    await writeFile(absolute, current.replace(proposal.oldText, proposal.newText), "utf8");
+    await writeFile(absolute, current.replace(proposal.oldText, () => proposal.newText), "utf8");
     this.proposals = this.proposals.filter((item) => item !== proposal);
     this.lastProposal = this.proposals.at(-1);
     this.proposalSnapshots.delete(proposal.path);

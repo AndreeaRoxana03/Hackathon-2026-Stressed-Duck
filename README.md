@@ -36,7 +36,7 @@ Replace `COM4` with the port shown by `python -m platformio device list`.
 
 The independent TypeScript host and VS Code client are in [duck-agent/README.md](duck-agent/README.md). The current firmware is still an offline demo: it emits `EVENT:FIST_SLAM` but does not yet parse host responses.
 
-The host now supports focused-editor context, bounded Studio tool investigation, reviewable edits, cancellation/cooldown and an optional authenticated CoreS3 audio/transcription channel. Firmware receiver/backend mode, TTS, microphone capture and Wi-Fi pairing remain teammate-owned integration work. The shared contract and hardware verification gates are in [duck-agent/docs/firmware-integration.md](duck-agent/docs/firmware-integration.md).
+The host now supports focused-editor context, bounded Studio tool investigation, snapshot-checked edits, cancellation/cooldown and an optional authenticated CoreS3 audio/transcription channel. Firmware receiver/backend mode, TTS, microphone capture and Wi-Fi pairing remain teammate-owned integration work. The shared contract and hardware verification gates are in [duck-agent/docs/firmware-integration.md](duck-agent/docs/firmware-integration.md).
 
 ## Source assets and generated files
 

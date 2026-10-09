@@ -182,3 +182,32 @@ test("clarification invites speech and never exposes proposed edits", async () =
   assert.match(outcome.comment, /speak/i);
   assert.deepEqual(outcome.result?.proposedEdits, []);
 });
+
+test("retains completed fixes when the investigation reaches its step limit", async () => {
+  const proposal = { path: "code.ts", oldText: "before", newText: "after", baseText: "before", diff: "fix" };
+  const client = {
+    async run(_request: StudioRunRequest, onEvent: (event: { type: string; [key: string]: unknown }) => void) {
+      onEvent({ type: "TOOL_CALL_START", toolCallId: "edit-1", toolCallName: "propose_edit" });
+      onEvent({ type: "TOOL_CALL_ARGS", toolCallId: "edit-1", delta: "{}" });
+      onEvent({ type: "RUN_FINISHED", awaitedToolCallIds: ["edit-1"] });
+    },
+  } as unknown as StudioClient;
+  let cleared = false;
+  const runner = new StudioAgentRunner({
+    client,
+    prompt: "Fix errors.",
+    maxToolLegs: 1,
+    toolExecutor: {
+      definitions: [],
+      async execute() { return { content: "staged", proposal }; },
+      getLastProposal() { return proposal; },
+      async applyLastProposal() { return proposal; },
+      clearLastProposal() { cleared = true; },
+    },
+  });
+  const outcome = await runner.run(context());
+  assert.equal(outcome.status, "failure");
+  assert.deepEqual(outcome.result?.proposedEdits, [proposal]);
+  assert.match(outcome.result?.explanation ?? "", /step limit/);
+  assert.equal(cleared, false);
+});

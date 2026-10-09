@@ -2,6 +2,7 @@ import { OAuthTokenProvider, StaticTokenProvider } from "./auth.js";
 import { StudioAgentRunner } from "./agent-runner.js";
 import {
   DuckBrokerServer,
+  type BrokerProgress,
   type BrokerTriggerRequest,
   type EditorContext,
 } from "./broker.js";
@@ -22,6 +23,7 @@ import { FocusedWindowRouter } from "./window-router.js";
 import { ClarificationSessions, DuckAudioServer } from "./audio-server.js";
 import { OpenAICompatibleTranscriber } from "./speech.js";
 import { parseFirmwareLine } from "./protocol.js";
+import type { AgentActivity } from "./agent-result.js";
 
 const MOCK_PROMPT =
   "This is a connection test from the mocked Stressed Duck. Confirm that you received the fist-slam event, then reply with one short sentence. Do not request tools.";
@@ -68,6 +70,12 @@ function logStudioEvent(event: StudioEvent): void {
   if (process.env.DUCK_VERBOSE === "1") {
     console.log(`STUDIO_EVENT ${event.type}`);
   }
+}
+
+function studioToolName(event: StudioEvent): string {
+  return typeof event.toolCallName === "string" && event.toolCallName.trim()
+    ? event.toolCallName.trim()
+    : "local tool";
 }
 
 async function runMock(): Promise<void> {
@@ -181,7 +189,7 @@ function studioContextFromEditor(context: EditorContext | undefined): {
   const value = details.join("\n");
   return {
     prompt:
-      "Inspect the active editor context from the Stressed Duck. Use local tools for evidence. If you identify a concrete source change, you MUST call propose_edit with the exact path, oldText, and newText before returning JSON; describing a correction in prose is not a proposal. If exact replacement text is unavailable, use needs_clarification instead of claiming an edit. Run an allowlisted verification when useful. Return one JSON object with status (success, failure, or needs_clarification), roast, diagnosis, explanation, verification (array), and optional clarificationQuestion. Keep roast short and code-focused; if evidence is ambiguous, ask the developer to speak what failed and what they expected instead of guessing.",
+      "Inspect the active editor context from the Stressed Duck. Fix concrete errors using propose_edit with a workspace-relative path, exact oldText, and newText (empty for deletion). Fixes are automatically applied by VS Code after the run, without acceptance. Edits accumulate; read_file returns staged content after an edit. Line endings are normalized. Prefer a single replacement for related errors. If an edit fails, read the relevant staged lines and correct its text rather than guessing raw bytes. Tool success means staged, not applied or saved; tests read disk, not staged fixes. Return exactly one JSON object without preamble, with status (success, failure, or needs_clarification), roast, diagnosis, explanation, verification (array), and optional clarificationQuestion. Keep roast short and code-focused; if evidence is ambiguous, ask the developer to speak what failed and what they expected instead of guessing.",
     context: [{ description: "VS Code editor context", value }],
     ...(context.workspaceRoot ? { workspaceRoot: context.workspaceRoot } : {}),
   };
@@ -217,6 +225,37 @@ async function runBroker(): Promise<void> {
   let activeRequest = studioContextFromEditor(undefined);
   let activeRunner: StudioAgentRunner | undefined;
   let triggerPending = false;
+  let progress: BrokerProgress | undefined;
+  let progressLeg = 0;
+  let progressToolCalls = 0;
+  let liveActivity: AgentActivity[] = [];
+  const reportProgress = (phase: BrokerProgress["phase"], message: string) => {
+    progress = {
+      phase,
+      message,
+      ...(progressLeg > 0 ? { leg: progressLeg } : {}),
+      ...(progressToolCalls > 0 ? { toolCalls: progressToolCalls } : {}),
+      ...(liveActivity.length > 0 ? { activity: [...liveActivity] } : {}),
+    };
+    if (process.env.DUCK_VERBOSE === "1") {
+      console.log(`DUCK_PROGRESS ${message}`);
+    }
+  };
+  const brokerStudioEvent = (event: StudioEvent) => {
+    logStudioEvent(event);
+    if (event.type === "RUN_STARTED") {
+      progressLeg += 1;
+      reportProgress("running", `Studio leg ${progressLeg} started.`);
+    } else if (event.type === "TOOL_CALL_START") {
+      progressToolCalls += 1;
+      reportProgress("tool", `Studio requested ${studioToolName(event)}.`);
+    } else if (event.type === "RUN_FINISHED") {
+      const awaited = Array.isArray(event.awaitedToolCallIds) && event.awaitedToolCallIds.length > 0;
+      reportProgress(awaited ? "tool" : "running", awaited ? "Waiting for local tool results." : "Studio is composing the result.");
+    } else if (event.type === "RUN_ERROR") {
+      reportProgress("failed", "Studio reported a run error.");
+    }
+  };
   const windows = new FocusedWindowRouter();
   let originWindow: string | undefined;
   let originContext: EditorContext | undefined;
@@ -253,8 +292,15 @@ async function runBroker(): Promise<void> {
         prompt: activeRequest.prompt,
         requireStructuredResult: true,
         context: activeRequest.context,
+        onActivity: (activity) => {
+          liveActivity = [...liveActivity, activity];
+          reportProgress(
+            "tool",
+            `${activity.status === "failed" ? "Local tool failed" : "Local tool completed"}: ${activity.tool}.`,
+          );
+        },
         ...(toolHost ? { toolExecutor: toolHost, tools: toolHost.definitions, workspaceRoot: activeRequest.workspaceRoot } : {}),
-        onEvent: logStudioEvent,
+        onEvent: brokerStudioEvent,
       });
       activeRunner = request;
       return request.run(runContext);
@@ -282,6 +328,10 @@ async function runBroker(): Promise<void> {
     smartHoldMs: runtime.config.runtime.smartHoldMs,
     postRunCooldownMs: runtime.config.runtime.postRunCooldownMs,
   });
+  const currentStatus = () => ({
+    ...orchestrator.getStatus(),
+    ...(progress ? { progress } : {}),
+  });
   const brokerToken = process.env.DUCK_BROKER_TOKEN?.trim();
   if (!brokerToken) {
     await transport.close();
@@ -292,11 +342,12 @@ async function runBroker(): Promise<void> {
     pipeName: brokerPipeName(),
     token: brokerToken,
     handlers: {
-      onStatus: () => orchestrator.getStatus(),
+      onStatus: currentStatus,
       onStop: async () => {
         sessions?.cancel();
         pendingTranscript = undefined;
         windows.clear();
+        reportProgress("aborted", "Run stopped by the editor.");
         await orchestrator.cancel("Run aborted: Document modified during diagnosis");
       },
       onPoll: async (request) => {
@@ -314,7 +365,7 @@ async function runBroker(): Promise<void> {
         const speech = request.windowId === originWindow ? sessionStatus : undefined;
         return {
           ok: true,
-          ...(request.windowId === originWindow ? { status: orchestrator.getStatus() } : {}),
+          ...(request.windowId === originWindow ? { status: currentStatus() } : {}),
           ...(captureId ? { captureId } : {}),
           ...(speech ? { speech } : {}),
           ...(speechError && request.windowId === originWindow ? { error: speechError } : {}),
@@ -322,7 +373,7 @@ async function runBroker(): Promise<void> {
       },
       onTrigger: async (request: BrokerTriggerRequest) => {
         if (triggerPending || !orchestrator.canTrigger()) {
-          return { accepted: false, status: orchestrator.getStatus() };
+          return { accepted: false, status: currentStatus() };
         }
         if (!request.windowId || !windows.isFocused(request.windowId) || !request.context?.workspaceRoot || !request.context.filePath) {
           throw new Error("A fresh trusted focused editor context is required.");
@@ -332,7 +383,7 @@ async function runBroker(): Promise<void> {
         }
         const speechState = sessions?.getStatus()?.state;
         if (speechState && !["complete", "cancelled"].includes(speechState)) {
-          return { accepted: false, status: orchestrator.getStatus() };
+          return { accepted: false, status: currentStatus() };
         }
         if (pendingTranscript && (request.windowId !== originWindow || request.context.filePath !== originContext?.filePath || request.context.workspaceRoot !== originContext?.workspaceRoot || request.context.documentVersion !== originContext?.documentVersion)) {
           pendingTranscript = undefined;
@@ -340,6 +391,10 @@ async function runBroker(): Promise<void> {
           throw new Error("Clarification discarded because the originating context changed.");
         }
         triggerPending = true;
+        progressLeg = 0;
+        progressToolCalls = 0;
+        liveActivity = [];
+        reportProgress("starting", "Context received. Starting Studio investigation.");
         console.log(request.captureId
           ? "FIST_SLAM accepted from the duck; fresh VS Code context received."
           : "FIST_SLAM simulated by the VS Code command; fresh context received.");
@@ -368,7 +423,7 @@ async function runBroker(): Promise<void> {
           }
           return {
             accepted,
-            status: orchestrator.getStatus(),
+            status: currentStatus(),
             ...(accepted ? { result: orchestrator.getLastOutcome()?.result } : {}),
           };
         } finally {
@@ -380,7 +435,7 @@ async function runBroker(): Promise<void> {
         if (!sessions || !sessions.getStatus()) {
           throw new Error("No configured CoreS3 speech clarification session is available.");
         }
-        return { accepted: false, status: orchestrator.getStatus() };
+        return { accepted: false, status: currentStatus() };
       },
     },
   });

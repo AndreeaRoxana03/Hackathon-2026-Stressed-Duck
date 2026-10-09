@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { createServer, type Server, type Socket } from "node:net";
-import type { AgentEditProposal, AgentResult } from "./agent-result.js";
+import type { AgentActivity, AgentEditProposal, AgentResult } from "./agent-result.js";
 import type { OrchestratorState } from "./orchestrator.js";
 import type { AudioSessionStatus } from "./audio-server.js";
 
@@ -46,9 +46,18 @@ export interface BrokerClarificationRequest {
   readonly microphone?: boolean;
 }
 
+export interface BrokerProgress {
+  readonly phase: "starting" | "running" | "tool" | "finished" | "failed" | "aborted";
+  readonly message: string;
+  readonly leg?: number;
+  readonly toolCalls?: number;
+  readonly activity?: readonly AgentActivity[];
+}
+
 export interface BrokerStatus {
   readonly state: OrchestratorState;
   readonly cooldownUntilMs: number;
+  readonly progress?: BrokerProgress;
   readonly lastResult?: AgentResult;
 }
 
