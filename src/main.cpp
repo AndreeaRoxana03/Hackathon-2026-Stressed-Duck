@@ -67,6 +67,8 @@ uint32_t walkingSinceMs = 0;
 uint32_t walkLegSinceMs = 0;
 uint32_t smartSinceMs = 0;
 bool walkReturning = false;
+bool walkingToExit = false;
+int16_t walkExitX = WALK_RIGHT_X;
 float windowMaxMagnitude = 0.0f;
 uint32_t windowStartMs = 0;
 char hostLine[HOST_LINE_BUFFER_SIZE + 1] = {};
@@ -207,6 +209,7 @@ void setDuckState(DuckState state) {
         walkingSinceMs = millis();
         walkLegSinceMs = walkingSinceMs;
         walkReturning = false;
+        walkingToExit = false;
     } else if (state == DUCK_COOL) {
         smartSinceMs = millis();
     }
@@ -465,11 +468,18 @@ void updateWalking() {
     constexpr int32_t WALK_DISTANCE = WALK_RIGHT_X - WALK_LEFT_X;
     constexpr uint32_t LEG_MS = WALK_DURATION_MS / 2;
     uint32_t elapsed = millis() - walkLegSinceMs;
-    if (elapsed >= LEG_MS) {
-        if (backendControlled && hostMood == DUCK_COOL) {
-            setDuckState(DUCK_COOL);
-            return;
+    if (backendControlled && hostMood == DUCK_COOL) {
+        if (!walkingToExit) {
+            walkingToExit = true;
+            walkExitX = walkReturning ? WALK_LEFT_X : WALK_RIGHT_X;
         }
+        duckAnim.setPosition(walkExitX);
+        if (duckAnim.x() == walkExitX) {
+            setDuckState(DUCK_COOL);
+        }
+        return;
+    }
+    if (elapsed >= LEG_MS) {
         walkLegSinceMs += LEG_MS;
         elapsed -= LEG_MS;
         walkReturning = !walkReturning;

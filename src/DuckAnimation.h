@@ -22,6 +22,7 @@ public:
     void setPosition(int16_t x);
     // Jumps to x without erasing; use right after the screen was cleared.
     void snapTo(int16_t x);
+    int16_t x() const { return _x; }
     void update();
 
 private:
