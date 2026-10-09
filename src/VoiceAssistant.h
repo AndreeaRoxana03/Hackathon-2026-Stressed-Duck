@@ -11,7 +11,9 @@ public:
     void begin(StatusCallback) {}
     void update() {}
     void sayStressed() {}
+    void sayHappy() {}
     void setIdleChatter(bool) {}
+    bool isSpeaking() const { return false; }
     bool isRecording() const { return false; }
 };
 
@@ -26,8 +28,11 @@ public:
     void update();
     // Speaks a random line from the [stressed] section of speech.txt, interrupting any current clip.
     void sayStressed();
+    // Speaks a random line from the [happy] section without needing a touch.
+    void sayHappy();
     // While enabled, speaks a random [happy] line every 20-60 s when nothing else is being said.
     void setIdleChatter(bool enabled);
+    bool isSpeaking() const { return _speaking; }
     bool isRecording() const { return false; }
 
 private:

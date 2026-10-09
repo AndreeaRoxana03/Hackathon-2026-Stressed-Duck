@@ -127,6 +127,10 @@ void VoiceAssistant::sayStressed() {
     speakRandom(GROUP_STRESSED, _lastStressed);
 }
 
+void VoiceAssistant::sayHappy() {
+    speakRandom(GROUP_HAPPY, _lastHappy);
+}
+
 void VoiceAssistant::setIdleChatter(bool enabled) {
     _chatter = enabled;
     if (enabled) {
