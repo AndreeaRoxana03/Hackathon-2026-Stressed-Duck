@@ -2,6 +2,7 @@
 .vscode/
 __pycache__/
 *.py[cod]
+.venv/
 
 # Keep directory placeholders if they are added later.
 !src/generated/.gitkeep

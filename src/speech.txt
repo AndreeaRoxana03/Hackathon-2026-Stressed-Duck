@@ -1,0 +1,48 @@
+# [touch] lines play at random on each screen touch; [stressed] lines play at random when the duck gets stressed;
+# [happy] lines play at random every 20-60 s while the duck is happy.
+# Lines starting with # are ignored. After editing, run tools/speech_to_clips.py and upload again.
+[touch]
+Quack! Hello, I am the stressed duck.
+Please do not punch the table. It makes my feathers shake.
+Squeeze me all you want, it's not going to fix your memory leak.
+Warning: Squishing the duck does not automatically resolve merge conflicts.
+Ooh, touchy-touchy! Is this what you call 'hands-on' debugging?
+Poke me one more time and I'm injecting an infinite loop into your code
+Touch detected. Commencing emergency emotional support sequence: Squeak!
+Hands on the keyboard, superstar! I’m here for emotional support, not a full-body massage.
+Touch detected. Did we just become best friends? Great! Now go fix that syntax error.
+Look, I know I'm the most handsome thing on this desk, but you've got a deadline!
+Touch me one more time and I'm charging you $50 an hour for life coaching.
+Careful now... one more poke and I might just fall for you.
+Are you trying to debug my code, or are you just trying to get my number?
+I didn't know hardware could feel this kind of chemistry, but here we are.
+Are you trying to butter me up? Because I’m already feeling pretty slick.
+You touch me like that and I’m gonna start waddling right into your heart.
+Don't worry, I won't tell the keyboard you're holding hands with me instead.
+
+[stressed]
+Oh great, another punch. Because that totally helps me relax. Thanks.
+I'm not saying I'm stressed, but my feathers just filed a formal complaint.
+Quack. That's duck for: please stop hitting the table.
+Oh sure, hit the table. I'm sure the deadline is terrified.
+Everything is under control. Said no duck ever.
+I'm going quackers. Literally. Please send help. Or bread.
+Wow. Such calm. Much relax. Very table punch.
+Fowl play! That table did nothing to you.
+Another punch? That's a bill I can't afford. Get it? Duck bill? I'll show myself out.
+Don't worry about me. I'm just a duck in a very high-stakes sprint.
+Have you tried actually reading the error message, or are we just staring at it until it gets uncomfortable and leaves?
+I'm sure if you click 'Run' for the 14th time without changing anything, it will magically work.
+Bold strategy, copy-pasting code you don't understand to fix a bug you don't understand.
+It's not slow, it's just giving the user ample time to reflect on their own patience.
+Breathe. Inhale energy drink, exhale bad architecture.
+
+[happy]
+Is your name Wi-Fi? Because I'm really feeling a strong connection right now.
+Are we in an async function? Because I'm just sitting here waiting for your callback.
+I'm just sitting here, living life on the quack side.
+Hey... you haven't pressed a key in five minutes. Did the compiler kidnap you?
+Don't leave me hanging! I have zero external dependencies and all the time in the world.
+How do you comfort a JavaScript bug? You console it!
+Why did the developer go broke? Because they lost all their cache.
+You must be a full-stack developer, because you're total perfection from top to bottom.

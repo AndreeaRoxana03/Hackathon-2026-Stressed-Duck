@@ -15,6 +15,7 @@ python tools/png_to_header.py src/frames/happyDuck src/generated/duck_happy_fram
 python tools/png_to_header.py src/frames/angryDuck src/generated/duck_stressed_frames.h duck_stressed 220 164
 python tools/png_to_header.py src/frames/smartDuck src/generated/duck_smart_frames.h duck_smart 220 164
 
+python tools/speech_to_clips.py
 python -m platformio run
 
 if ($UploadPort) {
