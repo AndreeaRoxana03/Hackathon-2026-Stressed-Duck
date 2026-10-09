@@ -1,5 +1,6 @@
 #include <M5Unified.h>
 #include "DuckAnimation.h"
+#include "VoiceAssistant.h"
 #include "generated/duck_happy_frames.h"
 #include "generated/duck_stressed_frames.h"
 #include "generated/duck_smart_frames.h"
@@ -12,6 +13,8 @@ enum DuckState {
 
 DuckState currentState = DUCK_HAPPY;
 DuckAnimation duckAnim;
+VoiceAssistant voice;
+const char* voiceStatus = "";
 
 constexpr uint16_t HAPPY_BACKGROUND = 0xD622;
 constexpr uint16_t STRESSED_BACKGROUND = 0xBB6E;
@@ -21,6 +24,10 @@ constexpr int16_t DUCK_ANIM_X = (320 - duck_happy_frame_width) / 2;
 constexpr int16_t DUCK_ANIM_Y = 70;
 constexpr int16_t DUCK_ANIM_W = duck_happy_frame_width;
 constexpr int16_t DUCK_ANIM_H = duck_happy_frame_height;
+
+// Voice status sits between the mood label and the duck sprite.
+constexpr int16_t STATUS_Y = 46;
+constexpr int16_t STATUS_H = 22;
 
 // Table-punch detection: accel magnitude spike above resting ~1g, with a cooldown to avoid retriggering.
 // Punching the table (not the device) transmits an attenuated shock, so this starts lower than a direct-hit
@@ -36,6 +43,29 @@ uint32_t lastDebugPrintMs = 0;
 uint32_t stressedSinceMs = 0;
 float windowMaxMagnitude = 0.0f;
 uint32_t windowStartMs = 0;
+
+void drawVoiceStatus() {
+    uint16_t background = SMART_BACKGROUND;
+    uint16_t foreground = TFT_WHITE;
+    if (currentState == DUCK_HAPPY) {
+        background = HAPPY_BACKGROUND;
+        foreground = TFT_BLACK;
+    } else if (currentState == DUCK_STRESSED) {
+        background = STRESSED_BACKGROUND;
+    }
+
+    auto &lcd = M5.Display;
+    lcd.fillRect(0, STATUS_Y, 320, STATUS_H, background);
+    lcd.setTextColor(foreground, background);
+    lcd.setTextSize(2);
+    lcd.setCursor(20, STATUS_Y + 3);
+    lcd.print(voiceStatus);
+}
+
+void onVoiceStatus(const char* text) {
+    voiceStatus = text;
+    drawVoiceStatus();
+}
 
 void setDuckState(DuckState state) {
     currentState = state;
@@ -82,6 +112,13 @@ void setDuckState(DuckState state) {
 
     lcd.endWrite();
 
+    drawVoiceStatus();
+
+    voice.setIdleChatter(state == DUCK_HAPPY);
+    if (state == DUCK_STRESSED) {
+        voice.sayStressed();
+    }
+
     Serial.printf("Duck state set to: %d\n", static_cast<int>(state));
 }
 
@@ -101,9 +138,13 @@ void setup() {
 
     duckAnim.begin(DUCK_ANIM_X, DUCK_ANIM_Y, DUCK_ANIM_W, DUCK_ANIM_H);
     setDuckState(DUCK_HAPPY);
+    voice.begin(onVoiceStatus);
 }
 
 void checkForPunch() {
+#ifdef NATIVE_BUILD
+    float magnitude = nativeAccelMagnitude();
+#else
     auto mask = M5.Imu.update();
     if (!mask) {
         return;
@@ -111,6 +152,7 @@ void checkForPunch() {
 
     auto data = M5.Imu.getImuData();
     float magnitude = sqrtf(data.accel.x * data.accel.x + data.accel.y * data.accel.y + data.accel.z * data.accel.z);
+#endif
 
     uint32_t now = millis();
 
@@ -142,6 +184,17 @@ void checkForPunch() {
 void loop() {
     M5.update();
 
+#ifdef NATIVE_BUILD
+    int nativeBtn = nativeButtonPressed();
+    if (nativeBtn == 1) {
+        setDuckState(DUCK_HAPPY);
+    } else if (nativeBtn == 2) {
+        setDuckState(DUCK_STRESSED);
+    } else if (nativeBtn == 3) {
+        setDuckState(DUCK_COOL);
+    }
+#endif
+
     if (M5.BtnA.wasPressed()) {
         setDuckState(DUCK_HAPPY);
     } else if (M5.BtnB.wasPressed()) {
@@ -151,7 +204,12 @@ void loop() {
     }
 
     checkForPunch();
-    duckAnim.update();
+    voice.update();
+
+    // Image decoding would starve the mic queue, so the duck holds still while recording.
+    if (!voice.isRecording()) {
+        duckAnim.update();
+    }
 
     delay(10);
 }

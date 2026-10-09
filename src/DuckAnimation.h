@@ -1,6 +1,9 @@
 #pragma once
 
 #include <M5Unified.h>
+#ifdef NATIVE_BUILD
+#include "native_compat.h"
+#endif
 
 // One PNG-encoded animation frame, embedded as a flash byte array.
 struct DuckFrame {

@@ -34,6 +34,20 @@ Replace `COM4` with the port shown by `python -m platformio device list`.
 - After 10 seconds without another punch, it switches to the smart duck state.
 - Buttons A, B, and C select happy, stressed, and smart states for testing.
 
+## Spoken lines from a text file
+
+Each touch of the screen makes the duck say a random line from the `[touch]` section of `src/speech.txt`. When the duck becomes stressed (a table punch, or button B), it says a random sarcastic line from the `[stressed]` section, interrupting anything it was saying. While the duck is happy, it says a random line from the `[happy]` section every 20-60 seconds. Blank lines and lines starting with `#` are skipped. The lines are pre-rendered on the PC with a natural neural voice and embedded in the firmware, so the board needs no Wi-Fi or backend. The status line under the mood label shows "Touch to hear the duck" or "Speaking...".
+
+Whenever `src/speech.txt` changes, regenerate the clips and upload again:
+
+```powershell
+python tools/speech_to_clips.py            # needs internet while running; writes src/generated/speech_clips.bin
+python tools/speech_to_clips.py --voice en-US-EricNeural --rate +5%   # other voice/speed
+python -m platformio run -t upload
+```
+
+The default voice is `en-GB-RyanNeural`. The clips are 16 kHz mono with leading and trailing silence trimmed, and use about 32 KB of flash per second of speech (the app partition is 6.5 MB, shared with the firmware). The desktop preview has no speaker data, so speech is disabled there.
+
 ## Source assets and generated files
 
 Keep the original `.jpg` sprite sheets, Python tools, C++ source, and `platformio.ini` in Git.
