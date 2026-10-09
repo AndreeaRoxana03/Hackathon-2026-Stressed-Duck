@@ -1,0 +1,20 @@
+{
+  "name": "@stressed-duck/host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/cli.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/auth.test.js dist/protocol.test.js dist/config.test.js dist/serial.test.js dist/orchestrator.test.js dist/studio-client.test.js dist/runtime-config.test.js dist/agent-runner.test.js dist/broker.test.js dist/workspace-tools.test.js dist/speech.test.js"
+  },
+  "dependencies": {
+    "@serialport/parser-readline": "^13.0.0",
+    "serialport": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^6.0.3"
+  }
+}

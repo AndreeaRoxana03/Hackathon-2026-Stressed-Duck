@@ -1,0 +1,16 @@
+{
+  "serial": {
+    "port": null,
+    "baudRate": 115200
+  },
+  "studio": {
+    "baseUrl": "https://agents.dev.trimble-ai.com",
+    "agentId": "",
+    "configId": "latest",
+    "modelId": ""
+  },
+  "runtime": {
+    "smartHoldMs": 5000,
+    "postRunCooldownMs": 3000
+  }
+}
