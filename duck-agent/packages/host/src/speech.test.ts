@@ -47,37 +47,47 @@ test("sends bounded device speech chunks and waits for playback completion", asy
   const listeners = new Set<(line: string) => void>();
   const writes: string[] = [];
   let received = 0;
+  let ready = false;
   const audio = Buffer.alloc(600);
   const speech = new SerialSpeechOutput({
     async write(line) {
       writes.push(line);
       let ack = "0";
       if (line.startsWith("AUDIO|DATA=")) {
+        assert.equal(ready, false);
         received += Buffer.from(line.slice(11).trim(), "hex").length;
         ack = String(received);
       } else if (line === "AUDIO|END\n") {
+        assert.equal(ready, true);
         ack = "DONE";
       }
       for (const listener of listeners) { listener(`ACK|AUDIO=${ack}\n`); }
     },
     onLine(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
   }, async () => audio);
-  await speech.speak("The actual result.");
+  await speech.speak("The actual result.", undefined, () => {
+    assert.equal(received, audio.length);
+    assert.ok(writes.at(-1)?.startsWith("AUDIO|DATA="));
+    ready = true;
+  });
   assert.equal(writes[0], "AUDIO|BEGIN=600\n");
   assert.equal(writes.at(-1), "AUDIO|END\n");
   assert.equal(received, 600);
-  assert.ok(writes.every((line) => line.length < 160));
+  assert.equal(writes.filter((line) => line.startsWith("AUDIO|DATA=")).length, 3);
+  assert.ok(writes.every((line) => line.length <= 524));
   assert.equal(listeners.size, 0);
 });
 
 test("cancels device audio after a rejected chunk", async () => {
   let listener: ((line: string) => void) | undefined;
   const writes: string[] = [];
+  let ready = false;
   const speech = new SerialSpeechOutput({
     async write(line) { writes.push(line); listener?.("ACK|AUDIO=ERROR"); },
     onLine(callback) { listener = callback; return () => { listener = undefined; }; },
   }, async () => Buffer.alloc(32));
-  await assert.rejects(speech.speak("Result."), /rejected/);
+  await assert.rejects(speech.speak("Result.", undefined, () => { ready = true; }), /rejected/);
+  assert.equal(ready, false);
   assert.equal(writes.at(-1), "AUDIO|CANCEL\n");
 });
 

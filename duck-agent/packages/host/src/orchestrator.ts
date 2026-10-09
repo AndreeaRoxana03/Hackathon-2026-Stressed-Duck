@@ -50,6 +50,7 @@ export interface DuckOrchestratorOptions {
   readonly stressedHoldMs?: number;
   readonly speechOutput?: SpeechOutput;
   readonly onSpeechError?: (error: unknown) => void;
+  readonly onResultReady?: (result: AgentResult, signal: AbortSignal) => Promise<void>;
 }
 
 export class DuckOrchestrator {
@@ -186,6 +187,7 @@ export class DuckOrchestrator {
     this.activeController = controller;
     this.busy = true;
     this.state = "STRESSED";
+    this.lastOutcome = undefined;
 
     try {
       await this.send("STRESSED", DEFAULT_WORKING_COMMENT);
@@ -199,6 +201,10 @@ export class DuckOrchestrator {
       this.lastOutcome = outcome;
 
       if (outcome.status === "success") {
+        if (outcome.result && this.options.onResultReady) {
+          await this.options.onResultReady(outcome.result, controller.signal);
+          controller.signal.throwIfAborted();
+        }
         await this.finishSuccessfully(outcome.comment, controller.signal);
       } else {
         await this.finishImmediately(outcome.comment || DEFAULT_FAILURE_COMMENT);
@@ -217,16 +223,26 @@ export class DuckOrchestrator {
   }
 
   private async finishSuccessfully(comment: string, signal: AbortSignal): Promise<void> {
-    this.state = "COOL";
-    await this.send("COOL", comment);
-    signal.throwIfAborted();
+    const enterCool = async () => {
+      signal.throwIfAborted();
+      this.state = "COOL";
+      await this.send("COOL", comment);
+    };
     if (this.options.speechOutput) {
       try {
-        await this.options.speechOutput.speak(comment, signal);
+        await this.options.speechOutput.speak(comment, signal, enterCool);
+        if (this.state !== "COOL") {
+          await enterCool();
+        }
       } catch (error) {
         signal.throwIfAborted();
         this.options.onSpeechError?.(error);
+        if (this.state !== "COOL") {
+          await enterCool();
+        }
       }
+    } else {
+      await enterCool();
     }
     signal.throwIfAborted();
     this.activeController = null;

@@ -266,6 +266,7 @@ async function runBroker(): Promise<void> {
   const windows = new FocusedWindowRouter();
   let originWindow: string | undefined;
   let originContext: EditorContext | undefined;
+  let resultPresentation: { generation: number; complete: () => void } | undefined;
   let pendingTranscript: string | undefined;
   let speechError: string | undefined;
   let sessions: ClarificationSessions | undefined;
@@ -310,7 +311,9 @@ async function runBroker(): Promise<void> {
         onEvent: brokerStudioEvent,
       });
       activeRunner = request;
-      return request.run(runContext);
+      const outcome = await request.run(runContext);
+      reportProgress("finished", "Studio result complete.");
+      return outcome;
     },
     getLastResult() {
       return activeRunner?.getLastResult();
@@ -334,6 +337,32 @@ async function runBroker(): Promise<void> {
     runner: agentRunner,
     smartHoldMs: runtime.config.runtime.smartHoldMs,
     postRunCooldownMs: runtime.config.runtime.postRunCooldownMs,
+    onResultReady: async (result, signal) => {
+      signal.throwIfAborted();
+      const generation = result.generation;
+      if (generation === undefined) {
+        throw new Error("The completed Studio result has no run generation.");
+      }
+      reportProgress("finished", "Studio result complete. Applying changes in the editor.");
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          clearTimeout(timer);
+          signal.removeEventListener("abort", abort);
+          resultPresentation = undefined;
+        };
+        const abort = () => { cleanup(); reject(signal.reason); };
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error("The editor did not confirm the completed result."));
+        }, 30_000);
+        resultPresentation = {
+          generation,
+          complete: () => { cleanup(); resolve(); },
+        };
+        signal.addEventListener("abort", abort, { once: true });
+      });
+      reportProgress("finished", "Result displayed and edit attempts completed. Preparing duck speech.");
+    },
     ...(process.env.DUCK_MOCK_DUCK === "0" ? {
       stressedHoldMs: 3_000,
       speechOutput: new SerialSpeechOutput(transport),
@@ -364,6 +393,10 @@ async function runBroker(): Promise<void> {
       },
       onPoll: async (request) => {
         windows.heartbeat(request);
+        if (request.trusted && request.windowId === originWindow &&
+            request.completedGeneration === resultPresentation?.generation) {
+          resultPresentation?.complete();
+        }
         const sessionStatus = sessions?.getStatus();
         if (originWindow && !windows.isAlive(originWindow)) {
           sessions?.cancel();

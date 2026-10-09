@@ -69,6 +69,20 @@ test("authorizes and bounds a trigger request", async () => {
   assert.equal(receivedPrompt, "Inspect this.");
 });
 
+test("validates editor completion acknowledgements on window polls", async () => {
+  let generation: number | undefined;
+  const requestHandlers: BrokerHandlers = {
+    ...handlers(),
+    async onPoll(request) { generation = request.completedGeneration; return { ok: true }; },
+  };
+  const request = { type: "poll", token: "broker-token", protocolVersion: 1, windowId: "editor", trusted: true };
+  assert.equal((await handleBrokerMessage(JSON.stringify({ ...request, completedGeneration: 2 }), "broker-token", requestHandlers)).ok, true);
+  assert.equal(generation, 2);
+  for (const invalid of [0, -1, 1.5, "2"]) {
+    assert.equal((await handleBrokerMessage(JSON.stringify({ ...request, completedGeneration: invalid }), "broker-token", requestHandlers)).ok, false);
+  }
+});
+
 test("rejects unauthorized and malformed broker messages", async () => {
   assert.deepEqual(await handleBrokerMessage(JSON.stringify({ type: "status", token: "broker-token", protocolVersion: 999 }), "broker-token", handlers()), {
     ok: false,

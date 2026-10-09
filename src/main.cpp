@@ -53,6 +53,7 @@ constexpr uint32_t STRESSED_DURATION_MS = 3000;
 constexpr uint32_t WALK_DURATION_MS = 6000;
 constexpr uint32_t SMART_DURATION_MS = 3000;
 constexpr uint16_t WALK_FRAME_DELAY_MS = 25;  // 40 FPS, walking only
+constexpr uint32_t RECEIVING_ANIM_INTERVAL_MS = 60;
 constexpr size_t HOST_LINE_BUFFER_SIZE = 1024;
 constexpr size_t HOST_COMMENT_MAX_LENGTH = 160;
 constexpr uint32_t HOST_RESPONSE_TIMEOUT_MS = 10000;
@@ -63,6 +64,7 @@ uint32_t lastPunchMs = 0;
 uint32_t lastDebugPrintMs = 0;
 uint32_t stressedSinceMs = 0;
 uint32_t walkingSinceMs = 0;
+uint32_t walkLegSinceMs = 0;
 uint32_t smartSinceMs = 0;
 bool walkReturning = false;
 float windowMaxMagnitude = 0.0f;
@@ -203,6 +205,7 @@ void setDuckState(DuckState state) {
         stressedSinceMs = millis();
     } else if (state == DUCK_WALK) {
         walkingSinceMs = millis();
+        walkLegSinceMs = walkingSinceMs;
         walkReturning = false;
     } else if (state == DUCK_COOL) {
         smartSinceMs = millis();
@@ -237,6 +240,8 @@ void setDuckState(DuckState state) {
 
         case DUCK_WALK:
             lcd.fillRect(0, 0, SCREEN_WIDTH, STATUS_Y + STATUS_H, STRESSED_BACKGROUND);
+            // The walking duck starts off-screen, so the stressed duck would otherwise linger as a ghost.
+            lcd.fillRect(0, DUCK_ANIM_Y, SCREEN_WIDTH, DUCK_ANIM_H, STRESSED_BACKGROUND);
             lcd.setTextColor(TFT_WHITE, STRESSED_BACKGROUND);
             lcd.setTextSize(2);
             lcd.setCursor(10, 3);
@@ -261,36 +266,39 @@ void setDuckState(DuckState state) {
     lcd.endWrite();
 
     drawMuteButton();
-    duckAnim.snapTo(DUCK_ANIM_X);
+    // Walking always starts from the left edge so it never pops in from the middle of the screen.
+    duckAnim.snapTo(state == DUCK_WALK ? WALK_LEFT_X : DUCK_ANIM_X);
     if (state != DUCK_WALK) {
         drawVoiceStatus();
     }
 
     voice.setIdleChatter(state == DUCK_HAPPY);
+    voice.setWalking(state == DUCK_WALK);
     if (state == DUCK_STRESSED && !backendControlled) {
         voice.sayStressed();
-    }
-    if (state == DUCK_WALK && backendControlled) {
-        voice.quack();
     }
 
     Serial.printf("Duck state set to: %d\n", static_cast<int>(state));
 }
 
 void applyHostResponse(const char* line) {
-    if (strncmp(line, "AUDIO|BEGIN=", 12) == 0 && backendControlled && currentState == DUCK_COOL) {
+    const bool canReceiveAudio = backendControlled &&
+        (currentState == DUCK_STRESSED || currentState == DUCK_WALK || currentState == DUCK_COOL);
+    if (strncmp(line, "AUDIO|BEGIN=", 12) == 0 && canReceiveAudio) {
         char* end = nullptr;
         const unsigned long bytes = strtoul(line + 12, &end, 10);
         if (end != line + 12 && *end == '\0' && voice.beginHostAudio(bytes)) {
+            lastHostResponseMs = millis();
             Serial.println("ACK|AUDIO=0");
         } else {
             Serial.println("ACK|AUDIO=ERROR");
         }
         return;
     }
-    if (strncmp(line, "AUDIO|DATA=", 11) == 0 && backendControlled && currentState == DUCK_COOL) {
+    if (strncmp(line, "AUDIO|DATA=", 11) == 0 && canReceiveAudio) {
         const int received = voice.appendHostAudio(line + 11);
         if (received >= 0) {
+            lastHostResponseMs = millis();
             Serial.printf("ACK|AUDIO=%d\n", received);
         } else {
             voice.cancelHostAudio();
@@ -299,8 +307,10 @@ void applyHostResponse(const char* line) {
         return;
     }
     if (strcmp(line, "AUDIO|END") == 0) {
-        if (!backendControlled || currentState != DUCK_COOL || !voice.finishHostAudio()) {
+        if (!backendControlled || (currentState != DUCK_WALK && currentState != DUCK_COOL) || !voice.finishHostAudio()) {
             Serial.println("ACK|AUDIO=ERROR");
+        } else {
+            lastHostResponseMs = millis();
         }
         return;
     }
@@ -320,6 +330,11 @@ void applyHostResponse(const char* line) {
     memcpy(hostComment, parsedComment, sizeof(hostComment));
     voiceStatus = "";
     if (firstHostResponse || requestedState != hostMood) {
+        if (currentState == DUCK_WALK && requestedState == DUCK_COOL) {
+            hostMood = requestedState;
+            Serial.printf("ACK|MOOD=%s\n", wireMood(requestedState));
+            return;
+        }
         setDuckState(requestedState);
     }
     hostMood = requestedState;
@@ -376,7 +391,7 @@ void setup() {
     M5.begin(cfg);
 
 #ifndef NATIVE_BUILD
-    Serial.setRxBufferSize(4096);
+    Serial.setRxBufferSize(16384);
 #endif
     Serial.begin(115200);
 
@@ -433,8 +448,8 @@ void checkForPunch() {
     if (!backendControlled) {
         if (currentState == DUCK_STRESSED && now - stressedSinceMs >= STRESSED_DURATION_MS && !voice.isSpeaking()) {
             setDuckState(DUCK_WALK);
-        } else if (currentState == DUCK_WALK && now - walkingSinceMs >= WALK_DURATION_MS) {
-            setDuckState(DUCK_COOL);
+        } else if (currentState == DUCK_WALK && now - walkingSinceMs >= HOST_RESPONSE_TIMEOUT_MS) {
+            setDuckState(DUCK_HAPPY);
         } else if (currentState == DUCK_COOL && now - smartSinceMs >= SMART_DURATION_MS) {
             setDuckState(DUCK_HAPPY);
         }
@@ -446,34 +461,27 @@ void updateWalking() {
         return;
     }
 
-    // From the resting spot off the right edge, then right to left off the left edge, at one constant speed.
-    constexpr int32_t OUT_DISTANCE = WALK_RIGHT_X - DUCK_ANIM_X;
-    constexpr int32_t BACK_DISTANCE = WALK_RIGHT_X - WALK_LEFT_X;
-    constexpr int32_t OUT_MS = WALK_DURATION_MS * OUT_DISTANCE / (OUT_DISTANCE + BACK_DISTANCE);
-    constexpr int32_t BACK_MS = WALK_DURATION_MS - OUT_MS;
-    uint32_t walkingElapsed = millis() - walkingSinceMs;
-    if (backendControlled && walkingElapsed >= WALK_DURATION_MS) {
-        walkingSinceMs = millis();
-        walkReturning = false;
-        duckAnim.setFrames(duck_walk_frames, duck_walk_frame_count, WALK_FRAME_DELAY_MS);
-        walkingElapsed = 0;
+    // Always a full edge-to-edge crossing at one constant speed; never a partial leg from the middle.
+    constexpr int32_t WALK_DISTANCE = WALK_RIGHT_X - WALK_LEFT_X;
+    constexpr uint32_t LEG_MS = WALK_DURATION_MS / 2;
+    uint32_t elapsed = millis() - walkLegSinceMs;
+    if (elapsed >= LEG_MS) {
+        if (backendControlled && hostMood == DUCK_COOL) {
+            setDuckState(DUCK_COOL);
+            return;
+        }
+        walkLegSinceMs += LEG_MS;
+        elapsed -= LEG_MS;
+        walkReturning = !walkReturning;
+        if (walkReturning) {
+            duckAnim.setFrames(duck_reverse_walk_frames, duck_reverse_walk_frame_count, WALK_FRAME_DELAY_MS);
+        } else {
+            duckAnim.setFrames(duck_walk_frames, duck_walk_frame_count, WALK_FRAME_DELAY_MS);
+        }
     }
-    int32_t elapsed = static_cast<int32_t>(walkingElapsed);
 
-    if (elapsed < OUT_MS) {
-        duckAnim.setPosition(DUCK_ANIM_X + OUT_DISTANCE * elapsed / OUT_MS);
-        return;
-    }
-
-    if (!walkReturning) {
-        walkReturning = true;
-        duckAnim.setFrames(duck_reverse_walk_frames, duck_reverse_walk_frame_count, WALK_FRAME_DELAY_MS);
-    }
-    int32_t back = elapsed - OUT_MS;
-    if (back > BACK_MS) {
-        back = BACK_MS;
-    }
-    duckAnim.setPosition(WALK_RIGHT_X - BACK_DISTANCE * back / BACK_MS);
+    const int32_t progress = WALK_DISTANCE * static_cast<int32_t>(elapsed) / static_cast<int32_t>(LEG_MS);
+    duckAnim.setPosition(walkReturning ? WALK_RIGHT_X - progress : WALK_LEFT_X + progress);
 }
 
 void loop() {
@@ -516,9 +524,17 @@ void loop() {
     }
     voice.update(touchConsumed);
 
-    // Image decoding would starve the mic queue, so the duck holds still while recording.
+    // Image decoding would starve the mic queue, so the duck holds still while recording. While audio
+    // streams in over serial it keeps moving at a reduced rate so the transfer still gets serviced.
     if (!voice.isRecording()) {
-        duckAnim.update();
+        static uint32_t lastThrottledAnimMs = 0;
+        const uint32_t animNow = millis();
+        if (!voice.isReceivingAudio()) {
+            duckAnim.update();
+        } else if (animNow - lastThrottledAnimMs >= RECEIVING_ANIM_INTERVAL_MS) {
+            lastThrottledAnimMs = animNow;
+            duckAnim.update();
+        }
     }
 
     delay(10);

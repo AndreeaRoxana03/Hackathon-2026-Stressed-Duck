@@ -164,6 +164,9 @@ export async function consumeStudioEventStream(
       for (const block of blocks) {
         for (const event of parseEventBlock(block)) {
           onEvent(event);
+          if (event.type === "RUN_FINISHED" || event.type === "RUN_ERROR") {
+            return;
+          }
         }
       }
     }

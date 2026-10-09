@@ -40,6 +40,7 @@ export interface BrokerWindowPoll {
   readonly windowId: string;
   readonly focused: boolean;
   readonly trusted: boolean;
+  readonly completedGeneration?: number;
 }
 
 export interface BrokerClarificationRequest {
@@ -201,11 +202,19 @@ export async function handleBrokerMessage(
     }
     case "status":
       return { ok: true, status: handlers.onStatus() };
-    case "poll":
+    case "poll": {
       if (!handlers.onPoll || !stringValue(request.windowId)) {
         return { ok: false, error: "Window registration is unavailable." };
       }
-      return handlers.onPoll({ windowId: stringValue(request.windowId)!, focused: request.focused === true, trusted: request.trusted === true });
+      if (request.completedGeneration !== undefined &&
+          (typeof request.completedGeneration !== "number" || !Number.isSafeInteger(request.completedGeneration) || request.completedGeneration < 1)) {
+        return { ok: false, error: "Invalid completed result generation." };
+      }
+      return handlers.onPoll({
+        windowId: stringValue(request.windowId)!, focused: request.focused === true, trusted: request.trusted === true,
+        ...(request.completedGeneration === undefined ? {} : { completedGeneration: request.completedGeneration as number }),
+      });
+    }
     case "stop":
       await handlers.onStop();
       return { ok: true, status: handlers.onStatus() };

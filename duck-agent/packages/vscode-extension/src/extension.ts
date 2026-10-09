@@ -110,6 +110,7 @@ interface BrokerRequestOptions {
   readonly captureId?: string;
   readonly focused?: boolean;
   readonly trusted?: boolean;
+  readonly completedGeneration?: number;
 }
 
 interface PendingRun {
@@ -636,6 +637,8 @@ export function activate(context: vscode.ExtensionContext): void {
   let lastCapture: string | undefined;
   let pollInFlight = false;
   let lastShownGeneration: number | undefined;
+  let completedGeneration: number | undefined;
+  let finalResultShown = false;
   let lastSpeechState: string | undefined;
   let lastProgressKey: string | undefined;
   let lastConnectionError: string | undefined;
@@ -673,6 +676,8 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     capturing = true;
+    completedGeneration = undefined;
+    finalResultShown = false;
     let submitted = false;
     lastProgressKey = undefined;
     resultPanel = new ResultPanelController(context, createPanelState("capturing", "Capturing the active editor context..."));
@@ -693,11 +698,11 @@ export function activate(context: vscode.ExtensionContext): void {
       const response = await requestBroker("trigger", { context: editorContext, windowId, ...(captureId ? { captureId } : {}) });
       lastShownGeneration = response.result?.generation;
       clarificationContext = response.result?.status === "needs_clarification" ? editorContext : undefined;
-      if (pendingRun.stopped && response.result) {
+      if (pendingRun?.stopped && response.result) {
         throw new Error("Run cancelled; no automatic edits applied.");
       }
       pendingRun = undefined;
-      if (response.result) {
+      if (response.result && !finalResultShown) {
         await showBrokerResult(output, context, response, true, resultPanel);
       } else if (response.accepted === false) {
         resultPanel.update({ mode: "failure", message: response.status?.progress?.message ?? "The Stressed Duck was busy and did not start a run.", progress: response.status?.progress });
@@ -725,7 +730,10 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     pollInFlight = true;
     try {
-      const response = await requestBroker("poll", { windowId, focused: vscode.window.state.focused, trusted: vscode.workspace.isTrusted });
+      const response = await requestBroker("poll", {
+        windowId, focused: vscode.window.state.focused, trusted: vscode.workspace.isTrusted,
+        ...(completedGeneration === undefined ? {} : { completedGeneration }),
+      });
       if (!response.ok) {
         throw new Error(response.error ?? "Broker rejected window registration.");
       }
@@ -734,7 +742,7 @@ export function activate(context: vscode.ExtensionContext): void {
         lastConnectionError = undefined;
       }
       const progress = response.status?.progress;
-      if ((pendingRun || capturing) && progress) {
+      if ((pendingRun || capturing) && progress && !finalResultShown) {
         const progressKey = JSON.stringify(progress);
         if (progressKey !== lastProgressKey) {
           lastProgressKey = progressKey;
@@ -748,6 +756,15 @@ export function activate(context: vscode.ExtensionContext): void {
         void runTrigger(response.captureId);
       }
       const result = response.status?.lastResult;
+      if (pendingRun && !pendingRun.stopped && !finalResultShown && result &&
+          result.generation !== undefined && progress?.phase === "finished") {
+        pendingRun = undefined;
+        finalResultShown = true;
+        lastShownGeneration = result.generation;
+        await showBrokerResult(output, context, { ok: true, result }, true, resultPanel);
+        completedGeneration = result.generation;
+        output.appendLine("Final result displayed; automatic edit attempts completed.");
+      }
       if (!pendingRun && !capturing && result && result.generation !== lastShownGeneration) {
         lastShownGeneration = result.generation;
         await showResultPanel(context, result, true);

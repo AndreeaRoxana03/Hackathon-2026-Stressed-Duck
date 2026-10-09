@@ -1,7 +1,6 @@
 #ifndef NATIVE_BUILD
 
 #include "VoiceAssistant.h"
-#include <cmath>
 
 // Rendered from src/speech.txt by tools/speech_to_clips.py and embedded via board_build.embed_files.
 extern const uint8_t clipsStart[] asm("_binary_src_generated_speech_clips_bin_start");
@@ -25,6 +24,8 @@ uint32_t readU32(const uint8_t* p) {
 constexpr uint32_t GROUP_TOUCH = 0;
 constexpr uint32_t GROUP_STRESSED = 1;
 constexpr uint32_t GROUP_HAPPY = 2;
+constexpr uint32_t GROUP_QUACK = 3;
+constexpr uint32_t QUACK_INTERVAL_MS = 2000;
 constexpr uint32_t CHATTER_MIN_MS = 20000;
 constexpr uint32_t CHATTER_SPAN_MS = 40000;
 
@@ -128,6 +129,14 @@ void VoiceAssistant::update(bool touchConsumed) {
         return;
     }
 
+    if (_walking) {
+        if (millis() >= _nextQuackMs) {
+            _nextQuackMs = millis() + QUACK_INTERVAL_MS;
+            quack();
+        }
+        return;
+    }
+
     if (_chatter && millis() >= _nextChatterMs) {
         scheduleChatter();
         speakRandom(GROUP_HAPPY, _lastHappy);
@@ -149,21 +158,19 @@ void VoiceAssistant::sayHappy() {
 }
 
 void VoiceAssistant::quack() {
-    if (!_pcm[0] || !_pcm[1]) {
+    speakRandom(GROUP_QUACK, _lastQuack);
+}
+
+void VoiceAssistant::setWalking(bool enabled) {
+    if (_walking == enabled) {
         return;
     }
-    _activeBuffer ^= 1;
-    int16_t* pcm = _pcm[_activeBuffer];
-    constexpr uint32_t rate = 16000;
-    constexpr size_t count = rate / 3;
-    for (size_t index = 0; index < count; ++index) {
-        const float time = static_cast<float>(index) / rate;
-        const float envelope = sinf(3.14159265f * index / count);
-        const float phase = 6.2831853f * (650.0f * time - 500.0f * time * time);
-        pcm[index] = static_cast<int16_t>(10000.0f * envelope * (sinf(phase) + 0.4f * sinf(3.0f * phase)));
+    if (_walking && !_hostAudioReceiving && !_hostAudioPlaying) {
+        M5.Speaker.stop();
+        _speaking = false;
     }
-    _speaking = M5.Speaker.playRaw(pcm, count, rate, false, 1, -1, true);
-    Serial.printf("Voice: quack started=%d\n", _speaking);
+    _walking = enabled;
+    _nextQuackMs = millis();
 }
 
 void VoiceAssistant::setIdleChatter(bool enabled) {

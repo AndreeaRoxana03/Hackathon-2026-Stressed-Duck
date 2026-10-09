@@ -147,7 +147,13 @@ test("keeps smart mode through speech and starts the hold after playback", async
   const orchestrator = new DuckOrchestrator({
     transport,
     runner: { async run() { return { status: "success", comment: "Read the error next time." }; } },
-    speechOutput: { async speak(text) { spoken = text; await new Promise<void>((resolve) => { finishSpeech = resolve; }); } },
+    speechOutput: {
+      async speak(text, _signal, onReady) {
+        spoken = text;
+        await onReady?.();
+        await new Promise<void>((resolve) => { finishSpeech = resolve; });
+      },
+    },
     smartHoldMs: 5000,
     postRunCooldownMs: 3000,
     now: () => scheduler.nowMs,
@@ -165,6 +171,76 @@ test("keeps smart mode through speech and starts the hold after playback", async
   assert.equal(orchestrator.getStatus().state, "COOL");
   await scheduler.advance(1);
   assert.equal(orchestrator.getStatus().state, "HAPPY");
+});
+
+test("stays stressed until speech audio is ready, then switches to smart mode", async () => {
+  const transport = new FakeTransport();
+  const scheduler = new FakeScheduler();
+  let markReady: (() => void) | undefined;
+  const orchestrator = new DuckOrchestrator({
+    transport,
+    runner: { async run() { return { status: "success", comment: "Found it." }; } },
+    speechOutput: {
+      async speak(_text, _signal, onReady) {
+        await new Promise<void>((resolve) => { markReady = resolve; });
+        await onReady?.();
+      },
+    },
+    smartHoldMs: 5000,
+    postRunCooldownMs: 3000,
+    now: () => scheduler.nowMs,
+    scheduler,
+  });
+  orchestrator.ingestLine("EVENT:FIST_SLAM");
+  for (let turn = 0; turn < 5; ++turn) { await Promise.resolve(); }
+  assert.equal(orchestrator.getStatus().state, "STRESSED");
+  markReady?.();
+  for (let turn = 0; turn < 5; ++turn) { await Promise.resolve(); }
+  assert.equal(orchestrator.getStatus().state, "COOL");
+});
+
+test("falls back to smart mode if speech succeeds without signaling readiness", async () => {
+  const transport = new FakeTransport();
+  const scheduler = new FakeScheduler();
+  const orchestrator = new DuckOrchestrator({
+    transport,
+    runner: { async run() { return { status: "success", comment: "Done." }; } },
+    speechOutput: { async speak() {} },
+    smartHoldMs: 5000,
+    postRunCooldownMs: 3000,
+    now: () => scheduler.nowMs,
+    scheduler,
+  });
+  const run = orchestrator.ingestLine("EVENT:FIST_SLAM");
+  assert.equal(await run, true);
+  assert.equal(orchestrator.getStatus().state, "COOL");
+});
+
+test("waits for the editor to present the final result before sending smart", async () => {
+  const transport = new FakeTransport();
+  const scheduler = new FakeScheduler();
+  let finishPresentation: (() => void) | undefined;
+  const result = {
+    generation: 1, status: "success" as const, responseText: "Done.",
+    proposedEdits: [], verification: [], activity: [], legs: 1, toolCalls: 0,
+  };
+  const orchestrator = new DuckOrchestrator({
+    transport,
+    runner: { async run() { return { status: "success", comment: "Done.", result }; } },
+    onResultReady: async (readyResult) => {
+      assert.equal(readyResult, result);
+      await new Promise<void>((resolve) => { finishPresentation = resolve; });
+    },
+    smartHoldMs: 5000, postRunCooldownMs: 3000, scheduler,
+  });
+  const run = orchestrator.ingestLine("EVENT:FIST_SLAM");
+  for (let turn = 0; turn < 5; ++turn) { await Promise.resolve(); }
+  assert.equal(orchestrator.getStatus().lastResult, result);
+  assert.equal(orchestrator.getStatus().state, "STRESSED");
+  assert.ok(transport.writes.every((line) => !line.includes("MOOD=COOL")));
+  finishPresentation?.();
+  assert.equal(await run, true);
+  assert.equal(orchestrator.getStatus().state, "COOL");
 });
 
 test("holds stressed before starting a configured physical investigation", async () => {

@@ -46,3 +46,11 @@ Don't leave me hanging! I have zero external dependencies and all the time in th
 How do you comfort a JavaScript bug? You console it!
 Why did the developer go broke? Because they lost all their cache.
 You must be a full-stack developer, because you're total perfection from top to bottom.
+
+[quack]
+Quack!
+Quack quack!
+Quaaack!
+Quack-a-quack!
+Quack quack quack!
+Qua-quack!

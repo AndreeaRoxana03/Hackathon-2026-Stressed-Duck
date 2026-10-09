@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { StaticTokenProvider } from "./auth.js";
-import { StudioClient, type StudioRunRequest } from "./studio-client.js";
+import { consumeStudioEventStream, StudioClient, type StudioRunRequest } from "./studio-client.js";
 
 function response(body: string, status = 200, headers?: HeadersInit): Response {
   return new Response(body, { status, headers });
@@ -72,6 +72,24 @@ test("posts a run and consumes data and raw JSON SSE events", async () => {
   assert.deepEqual(JSON.parse(sentBody), request);
   assert.equal(sentSignal, undefined);
   assert.deepEqual(events, ["TEXT_MESSAGE_CONTENT", "RUN_FINISHED"]);
+});
+
+test("completes on a terminal event without waiting for Studio to close the stream", { timeout: 1000 }, async () => {
+  for (const terminal of ["RUN_FINISHED", "RUN_ERROR"]) {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder();
+        controller.enqueue(encoder.encode('data: {"type":"TEXT_MESSAGE_CONTENT","delta":"Done."}\n\n'));
+        controller.enqueue(encoder.encode(`data: {"type":"${terminal}"}\n\n`));
+      },
+      cancel() { cancelled = true; },
+    });
+    const events: string[] = [];
+    await consumeStudioEventStream(new Response(stream), (event) => events.push(event.type));
+    assert.deepEqual(events, ["TEXT_MESSAGE_CONTENT", terminal]);
+    assert.equal(cancelled, true);
+  }
 });
 
 test("passes cancellation to Studio fetch and reports HTTP details", async () => {

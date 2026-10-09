@@ -13,6 +13,7 @@ public:
     void sayStressed() {}
     void sayHappy() {}
     void quack() {}
+    void setWalking(bool) {}
     bool beginHostAudio(size_t) { return false; }
     int appendHostAudio(const char*) { return -1; }
     bool finishHostAudio() { return false; }
@@ -22,6 +23,7 @@ public:
     bool isMuted() const { return _muted; }
     bool isSpeaking() const { return false; }
     bool isRecording() const { return false; }
+    bool isReceivingAudio() const { return false; }
 
 private:
     bool _muted = false;
@@ -42,6 +44,7 @@ public:
     // Speaks a random line from the [happy] section without needing a touch.
     void sayHappy();
     void quack();
+    void setWalking(bool enabled);
     bool beginHostAudio(size_t bytes);
     int appendHostAudio(const char* hex);
     bool finishHostAudio();
@@ -53,6 +56,8 @@ public:
     bool isMuted() const { return _muted; }
     bool isSpeaking() const { return _speaking; }
     bool isRecording() const { return false; }
+    // True while AUDIO|DATA chunks are streaming in; display redraws are paused so serial reads stay responsive.
+    bool isReceivingAudio() const { return _hostAudioReceiving; }
 
 private:
     void speakClip(uint32_t group, size_t index);
@@ -67,8 +72,11 @@ private:
     size_t _lastTouch = static_cast<size_t>(-1);
     size_t _lastStressed = static_cast<size_t>(-1);
     size_t _lastHappy = static_cast<size_t>(-1);
+    size_t _lastQuack = static_cast<size_t>(-1);
     bool _chatter = false;
     bool _muted = false;
+    bool _walking = false;
+    uint32_t _nextQuackMs = 0;
     uint32_t _nextChatterMs = 0;
     bool _speaking = false;
     bool _hostAudioReceiving = false;

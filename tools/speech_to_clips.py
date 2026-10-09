@@ -23,7 +23,7 @@ import miniaudio
 SAMPLE_RATE = 16000  # 6.5 MB of app flash must hold the firmware plus every clip
 SILENCE_THRESHOLD = 400
 SILENCE_PAD_SECONDS = 0.1
-GROUPS = ("touch", "stressed", "happy")
+GROUPS = ("touch", "stressed", "happy", "quack")
 
 
 def trim_silence(samples):
