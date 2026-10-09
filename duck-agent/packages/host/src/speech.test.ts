@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { validateWav, createSpeechOutput } from "./speech.js";
+import { validateWav, createSpeechOutput, SerialSpeechOutput } from "./speech.js";
 import { ClarificationSessions } from "./audio-server.js";
 
 function wav(samples = 160): Buffer {
@@ -41,6 +41,44 @@ test("validates bounded mono PCM speech clips", () => {
   duplicate.writeUInt32LE(duplicate.length - 8, 4);
   assert.throws(() => validateWav(duplicate), /duplicate sample/);
   assert.equal(createSpeechOutput({}), undefined);
+});
+
+test("sends bounded device speech chunks and waits for playback completion", async () => {
+  const listeners = new Set<(line: string) => void>();
+  const writes: string[] = [];
+  let received = 0;
+  const audio = Buffer.alloc(600);
+  const speech = new SerialSpeechOutput({
+    async write(line) {
+      writes.push(line);
+      let ack = "0";
+      if (line.startsWith("AUDIO|DATA=")) {
+        received += Buffer.from(line.slice(11).trim(), "hex").length;
+        ack = String(received);
+      } else if (line === "AUDIO|END\n") {
+        ack = "DONE";
+      }
+      for (const listener of listeners) { listener(`ACK|AUDIO=${ack}\n`); }
+    },
+    onLine(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+  }, async () => audio);
+  await speech.speak("The actual result.");
+  assert.equal(writes[0], "AUDIO|BEGIN=600\n");
+  assert.equal(writes.at(-1), "AUDIO|END\n");
+  assert.equal(received, 600);
+  assert.ok(writes.every((line) => line.length < 160));
+  assert.equal(listeners.size, 0);
+});
+
+test("cancels device audio after a rejected chunk", async () => {
+  let listener: ((line: string) => void) | undefined;
+  const writes: string[] = [];
+  const speech = new SerialSpeechOutput({
+    async write(line) { writes.push(line); listener?.("ACK|AUDIO=ERROR"); },
+    onLine(callback) { listener = callback; return () => { listener = undefined; }; },
+  }, async () => Buffer.alloc(32));
+  await assert.rejects(speech.speak("Result."), /rejected/);
+  assert.equal(writes.at(-1), "AUDIO|CANCEL\n");
 });
 
 test("clarification requires playback completion and rejects replayed audio", async () => {

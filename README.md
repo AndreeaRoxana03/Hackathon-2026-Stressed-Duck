@@ -53,12 +53,14 @@ select the existing A, B, and C test states.
 
 - The duck starts in the happy state.
 - A table punch above the tuned vibration threshold switches to the stressed animation.
-- After 5 seconds, it switches to the smart duck state for 5 seconds, then returns to happy.
+- Without a broker connection, a punch runs the offline stressed, walking, smart, and happy demonstration.
+- In physical broker mode, the duck stays stressed for three seconds, quacks, and walks while the investigation runs. A successful response switches to the sunglasses animation and is spoken through the device speaker, not displayed as text.
+- The host owns result and cooldown timing; the duck acknowledges each mood over USB serial.
 - Buttons A, B, and C select happy, stressed, and smart states for testing.
 
-The independent TypeScript host and VS Code client are in [duck-agent/README.md](duck-agent/README.md). The current firmware is still an offline demo: it emits `EVENT:FIST_SLAM` but does not yet parse host responses.
+The independent TypeScript host and VS Code client are in [duck-agent/README.md](duck-agent/README.md). The firmware emits `EVENT:FIST_SLAM`, consumes broker mood responses, and acknowledges the applied mood over USB serial. If broker heartbeats stop, it returns to the offline demo after a bounded timeout.
 
-The host now supports focused-editor context, bounded Studio tool investigation, snapshot-checked edits, cancellation/cooldown and an optional authenticated CoreS3 audio/transcription channel. Firmware receiver/backend mode, TTS, microphone capture and Wi-Fi pairing remain teammate-owned integration work. The shared contract and hardware verification gates are in [duck-agent/docs/firmware-integration.md](duck-agent/docs/firmware-integration.md).
+The host now supports focused-editor context, bounded Studio tool investigation, snapshot-checked edits, cancellation/cooldown, Windows-generated response speech over USB, and an optional authenticated CoreS3 audio/transcription channel. Microphone capture and Wi-Fi pairing remain separate integration work. The shared contract and hardware verification gates are in [duck-agent/docs/firmware-integration.md](duck-agent/docs/firmware-integration.md).
 
 ## Source assets and generated files
 

@@ -15,6 +15,12 @@ test("recognizes only the firmware fist-slam event", () => {
   assert.equal(parseFirmwareLine("EVENT:FIST_SLAM extra\n"), null);
 });
 
+test("recognizes firmware mood acknowledgements and host timeout", () => {
+  assert.deepEqual(parseFirmwareLine("ACK|MOOD=COOL\n"), { type: "DUCK_ACK", mood: "COOL" });
+  assert.deepEqual(parseFirmwareLine("EVENT:HOST_TIMEOUT\n"), { type: "HOST_TIMEOUT" });
+  assert.equal(parseFirmwareLine(`ACK|MOOD=COOL${"x".repeat(MAX_COMMENT_LENGTH + 900)}\n`), null);
+});
+
 test("sanitizes response comments without leaking wire delimiters", () => {
   assert.equal(sanitizeComment("a|b\n\tc"), "a b c");
   const response = encodeDuckResponse({ mood: "COOL", comment: "a|b\n\tc" });

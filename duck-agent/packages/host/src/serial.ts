@@ -57,14 +57,17 @@ export class ReconnectingSerialTransport implements SerialTransport {
       this.timer = setTimeout(() => {
         void this.connect().then(async (transport) => {
           if (this.closed) { await transport.close(); return; }
+          this.attach(transport);
           try {
             await transport.write(encodeDuckResponse({ mood: "HAPPY", comment: "Reconnected." }));
           } catch (error) {
+            this.unsubscribe.forEach((remove) => remove());
+            this.unsubscribe = [];
+            this.current = undefined;
             await transport.close().catch(() => {});
             throw error;
           }
           if (this.closed) { await transport.close(); return; }
-          this.attach(transport);
         }).catch(() => {
           this.backoffMs = Math.min(30_000, this.backoffMs * 2);
           this.scheduleReconnect();
