@@ -1,6 +1,6 @@
 # Stressed Duck Agent
 
-This is an independent TypeScript host and VS Code extension for the Stressed Ducks project.
+This is an independent TypeScript host and VS Code extension for the Stressed Ducks project. 
 
 ## Current status
 
@@ -8,7 +8,7 @@ The host implements Studio JSON/SSE calls, OAuth/static authentication, bounded 
 
 The optional HTTPS CoreS3 audio channel implements expiring one-use clarification sessions, playback-complete gating, WAV validation and OpenAI-compatible transcription. A valid transcript requests fresh context from the same originating window/file/version after cooldown; context drift discards it. No typed clarification prompt or computer-microphone fallback is provided.
 
-Not yet hardware-verified: the teammate-owned firmware receiver/backend mode, TTS/microphone/network implementation, certificate pairing, USB-loss reconnection, and an actual voice-to-new-run session. Live Studio tool continuation and the Extension Development Host UI also require a smoke test. The current tool host reads disk files; unsaved editor excerpts are supplied separately, so checks do not verify unsaved proposed edits. Diagnosis conservatively aborts on any editor text change in its workspace; precise read-document tracking, owner-only pipe ACLs, and user model switching remain follow-up work.
+The firmware receiver/backend mode is implemented but not yet hardware-verified; TTS/microphone/network implementation, certificate pairing, USB-loss reconnection, and an actual voice-to-new-run session also remain to be tested. Live Studio tool continuation and the Extension Development Host UI require a smoke test. The current tool host reads disk files; unsaved editor excerpts are supplied separately, so checks do not verify unsaved proposed edits. Diagnosis conservatively aborts on any editor text change in its workspace; precise read-document tracking, owner-only pipe ACLs, and user model switching remain follow-up work.
 
 The host sends only a validated mood and short comment to the duck. `FIX` and `EXPLAIN` remain empty for wire compatibility.
 
@@ -150,7 +150,7 @@ MOCK_DUCK_RECEIVED RESP|MOOD=HAPPY|COMMENT=Ready.|FIX=|EXPLAIN=
 
 With a physical duck, the first line instead reads `FIST_SLAM detected; requesting fresh context from the focused VS Code window.` `npm run mock-run` is a separate Studio connectivity check; it does not capture an active VS Code editor. The offline `npm run simulator` does not contact Studio.
 
-Launch the host independently with `scripts/start-broker.ps1`; extensions never spawn or own it. Stop the host using Ctrl+C in its terminal. Stopping an investigation does not stop the host or unsubscribe serial. Run duration defaults to two minutes, with at most 16 Studio legs and 32 local calls. Success holds smart for five seconds, then happy with a three-second cooldown; failure/abort/clarification enter happy cooldown immediately. Knocks during work, smart hold, speech, or cooldown are discarded, not queued.
+Launch the host independently with `scripts/start-broker.ps1`; extensions never spawn or own it. Stop the host using Ctrl+C in its terminal. Stopping an investigation does not stop the host or unsubscribe serial. Run duration defaults to two minutes, with at most 16 Studio legs and 32 local calls. Physical runs start with three seconds of stressed animation, then walking with a quack. Success shows sunglasses, speaks the short response through the CoreS3 speaker using Windows-generated PCM over USB, holds smart for five seconds after playback, then returns happy with a three-second cooldown. Failure/abort/clarification enter happy cooldown immediately. Knocks during work, smart hold, speech, or cooldown are discarded, not queued.
 
 The broker cancels work/speech on serial disconnection and reconnects to the selected device with backoff capped at 30 seconds. New connections flush buffered data and start HAPPY; stale knocks are not replayed. An explicit port setting remains pinned to that port, so update it if Windows assigns a different port. Close any serial monitor if the device is busy.
 
@@ -170,7 +170,7 @@ From the `duck-agent` directory, an easy development launch is:
 code --extensionDevelopmentPath="$PWD\packages\vscode-extension" "$PWD"
 ```
 
-Set `DUCK_MOCK_DUCK=0` only after the hardware receiver is ready; the broker will then select the CoreS3 serial device instead of the mock transport.
+Set `DUCK_MOCK_DUCK=0` for the physical CoreS3 path; the broker will select the CoreS3 serial device instead of the mock transport. The firmware enters host-controlled mode after the first valid mood response and returns an `ACK|MOOD=...` line. The broker refreshes the current mood every second so long Studio runs do not trigger the firmware fallback timeout.
 
 ### CoreS3 Voice Clarification
 
@@ -180,7 +180,7 @@ Set `DUCK_AUDIO_PORT` (default 53683), `DUCK_AUDIO_CERT_FILE`, `DUCK_AUDIO_KEY_F
 
 The paired device polls `GET /session`, plays the matching short comment exactly once, posts `POST /playback-complete?id=<session-id>`, then records and posts `POST /audio?id=<session-id>` with `Content-Type: audio/wav`. Every request requires `Authorization: Bearer <device-token>`. Session IDs are one-use, expire after 60 seconds, and reject wrong/out-of-order/replayed uploads. Clips must be mono 16 kHz, 16-bit PCM WAV, at most 20 seconds and 1 MiB. Transcription times out after 30 seconds. See [docs/firmware-integration.md](docs/firmware-integration.md).
 
-Audio is bounded in memory, not persisted by this host, and discarded after the request/transcription. Provider retention follows the provider's policy. Normal roast playback is firmware-owned; the optional Windows speech adapter is not wired as a default playback or microphone substitute.
+Clarification audio is bounded in memory, not persisted by this host, and discarded after the request/transcription. Provider retention follows the provider's policy. Successful response playback is separate: the physical Windows broker synthesizes the actual short message locally and transfers bounded mono PCM over USB to the device speaker. It never plays the response on the computer speaker or prints it on the device screen. This does not implement device microphone capture or the HTTPS clarification pairing flow.
 
-`npm run live` opens the real serial port when a CoreS3 is available. The current firmware still emits events but does not parse host responses, so use `mock-run` until the hardware receiver work is complete.
+`npm run live` opens the real serial port when a CoreS3 is available. The broker command is the full VS Code-connected path; `live` remains a direct hardware smoke test without focused-editor context.
 

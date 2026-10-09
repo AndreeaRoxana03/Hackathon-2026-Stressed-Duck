@@ -1,6 +1,7 @@
 #ifndef NATIVE_BUILD
 
 #include "VoiceAssistant.h"
+#include <cmath>
 
 // Rendered from src/speech.txt by tools/speech_to_clips.py and embedded via board_build.embed_files.
 extern const uint8_t clipsStart[] asm("_binary_src_generated_speech_clips_bin_start");
@@ -93,8 +94,15 @@ void VoiceAssistant::begin(StatusCallback onStatus) {
         }
     }
 
-    M5.Speaker.begin();
+    M5.Speaker.end();
+    auto speakerConfig = M5.Speaker.config();
+    speakerConfig.stereo = true;
+    M5.Speaker.config(speakerConfig);
+    const bool speakerStarted = M5.Speaker.begin();
     M5.Speaker.setVolume(SPEAKER_VOLUME);
+    Serial.printf("Voice: speaker started=%d enabled=%d stereo=%d bck=%d ws=%d data=%d volume=%u\n",
+                  speakerStarted, M5.Speaker.isEnabled(), speakerConfig.stereo, speakerConfig.pin_bck,
+                  speakerConfig.pin_ws, speakerConfig.pin_data_out, M5.Speaker.getVolume());
     setStatus(IDLE_STATUS);
 }
 
@@ -106,9 +114,17 @@ void VoiceAssistant::update(bool touchConsumed) {
     if (_speaking) {
         if (!M5.Speaker.isPlaying()) {
             _speaking = false;
+            if (_hostAudioPlaying) {
+                _hostAudioPlaying = false;
+                Serial.println("ACK|AUDIO=DONE");
+            }
             Serial.println("Voice: clip finished");
             setStatus(IDLE_STATUS);
         }
+        return;
+    }
+
+    if (_hostAudioReceiving) {
         return;
     }
 
@@ -132,11 +148,84 @@ void VoiceAssistant::sayHappy() {
     speakRandom(GROUP_HAPPY, _lastHappy);
 }
 
+void VoiceAssistant::quack() {
+    if (!_pcm[0] || !_pcm[1]) {
+        return;
+    }
+    _activeBuffer ^= 1;
+    int16_t* pcm = _pcm[_activeBuffer];
+    constexpr uint32_t rate = 16000;
+    constexpr size_t count = rate / 3;
+    for (size_t index = 0; index < count; ++index) {
+        const float time = static_cast<float>(index) / rate;
+        const float envelope = sinf(3.14159265f * index / count);
+        const float phase = 6.2831853f * (650.0f * time - 500.0f * time * time);
+        pcm[index] = static_cast<int16_t>(10000.0f * envelope * (sinf(phase) + 0.4f * sinf(3.0f * phase)));
+    }
+    _speaking = M5.Speaker.playRaw(pcm, count, rate, false, 1, -1, true);
+    Serial.printf("Voice: quack started=%d\n", _speaking);
+}
+
 void VoiceAssistant::setIdleChatter(bool enabled) {
     _chatter = enabled;
     if (enabled) {
         scheduleChatter();
     }
+}
+
+bool VoiceAssistant::beginHostAudio(size_t bytes) {
+    if (!_pcm[0] || !_pcm[1] || bytes == 0 || bytes % 2 != 0 || bytes > PCM_CAPACITY * sizeof(int16_t)) {
+        return false;
+    }
+    cancelHostAudio();
+    _activeBuffer ^= 1;
+    _hostAudioBytes = bytes;
+    _hostAudioReceived = 0;
+    _hostAudioReceiving = true;
+    return true;
+}
+
+int VoiceAssistant::appendHostAudio(const char* hex) {
+    const size_t length = strlen(hex);
+    if (!_hostAudioReceiving || length == 0 || length > 512 || length % 2 != 0 ||
+        _hostAudioReceived + length / 2 > _hostAudioBytes) {
+        return -1;
+    }
+    auto digit = [](char character) -> int {
+        if (character >= '0' && character <= '9') { return character - '0'; }
+        if (character >= 'a' && character <= 'f') { return character - 'a' + 10; }
+        return -1;
+    };
+    for (size_t index = 0; index < length; ++index) {
+        if (digit(hex[index]) < 0) { return -1; }
+    }
+    uint8_t* destination = reinterpret_cast<uint8_t*>(_pcm[_activeBuffer]);
+    for (size_t index = 0; index < length; index += 2) {
+        destination[_hostAudioReceived++] = static_cast<uint8_t>((digit(hex[index]) << 4) | digit(hex[index + 1]));
+    }
+    return static_cast<int>(_hostAudioReceived);
+}
+
+bool VoiceAssistant::finishHostAudio() {
+    if (!_hostAudioReceiving || _hostAudioReceived != _hostAudioBytes) {
+        return false;
+    }
+    _hostAudioReceiving = false;
+    _hostAudioPlaying = M5.Speaker.playRaw(_pcm[_activeBuffer], _hostAudioBytes / 2, 16000, false, 1, -1, true);
+    _speaking = _hostAudioPlaying;
+    Serial.printf("Voice: host speech started=%d bytes=%u\n", _hostAudioPlaying, static_cast<unsigned>(_hostAudioBytes));
+    return _hostAudioPlaying;
+}
+
+void VoiceAssistant::cancelHostAudio() {
+    if (_hostAudioReceiving || _hostAudioPlaying || _speaking) {
+        M5.Speaker.stop();
+    }
+    _hostAudioReceiving = false;
+    _hostAudioPlaying = false;
+    _speaking = false;
+    _hostAudioBytes = 0;
+    _hostAudioReceived = 0;
 }
 
 void VoiceAssistant::scheduleChatter() {

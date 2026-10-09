@@ -1,4 +1,5 @@
 #include <M5Unified.h>
+#include <cstring>
 #include "DuckAnimation.h"
 #include "VoiceAssistant.h"
 #include "generated/duck_happy_frames.h"
@@ -52,6 +53,9 @@ constexpr uint32_t STRESSED_DURATION_MS = 3000;
 constexpr uint32_t WALK_DURATION_MS = 6000;
 constexpr uint32_t SMART_DURATION_MS = 3000;
 constexpr uint16_t WALK_FRAME_DELAY_MS = 25;  // 40 FPS, walking only
+constexpr size_t HOST_LINE_BUFFER_SIZE = 1024;
+constexpr size_t HOST_COMMENT_MAX_LENGTH = 160;
+constexpr uint32_t HOST_RESPONSE_TIMEOUT_MS = 10000;
 // A punch's peak only lasts a sample or two, so track the max seen over a short window instead of
 // a single instantaneous reading -- otherwise a brief spike can land between polls and get missed.
 constexpr uint32_t PUNCH_WINDOW_MS = 50;
@@ -63,6 +67,69 @@ uint32_t smartSinceMs = 0;
 bool walkReturning = false;
 float windowMaxMagnitude = 0.0f;
 uint32_t windowStartMs = 0;
+char hostLine[HOST_LINE_BUFFER_SIZE + 1] = {};
+size_t hostLineLength = 0;
+bool hostLineOverflow = false;
+char hostComment[HOST_COMMENT_MAX_LENGTH + 1] = {};
+bool backendControlled = false;
+uint32_t lastHostResponseMs = 0;
+DuckState hostMood = DUCK_HAPPY;
+
+const char* wireMood(DuckState state) {
+    switch (state) {
+        case DUCK_STRESSED:
+            return "STRESSED";
+        case DUCK_COOL:
+            return "COOL";
+        case DUCK_HAPPY:
+        case DUCK_WALK:
+        default:
+            return "HAPPY";
+    }
+}
+
+bool parseHostResponse(const char* line, DuckState& state, char* comment) {
+    const char* prefix = nullptr;
+    const char* happyPrefix = "RESP|MOOD=HAPPY|COMMENT=";
+    const char* stressedPrefix = "RESP|MOOD=STRESSED|COMMENT=";
+    const char* coolPrefix = "RESP|MOOD=COOL|COMMENT=";
+    if (strncmp(line, happyPrefix, strlen(happyPrefix)) == 0) {
+        state = DUCK_HAPPY;
+        prefix = happyPrefix;
+    } else if (strncmp(line, stressedPrefix, strlen(stressedPrefix)) == 0) {
+        state = DUCK_STRESSED;
+        prefix = stressedPrefix;
+    } else if (strncmp(line, coolPrefix, strlen(coolPrefix)) == 0) {
+        state = DUCK_COOL;
+        prefix = coolPrefix;
+    } else {
+        return false;
+    }
+
+    const char* suffix = "|FIX=|EXPLAIN=";
+    const size_t lineLength = strlen(line);
+    const size_t prefixLength = strlen(prefix);
+    const size_t suffixLength = strlen(suffix);
+    if (lineLength < prefixLength + suffixLength ||
+        strcmp(line + lineLength - suffixLength, suffix) != 0) {
+        return false;
+    }
+
+    const size_t commentLength = lineLength - prefixLength - suffixLength;
+    if (commentLength > HOST_COMMENT_MAX_LENGTH) {
+        return false;
+    }
+    for (size_t index = 0; index < commentLength; ++index) {
+        const unsigned char value = static_cast<unsigned char>(line[prefixLength + index]);
+        if (value < 0x20 || value > 0x7E || value == '|') {
+            return false;
+        }
+    }
+
+    memcpy(comment, line + prefixLength, commentLength);
+    comment[commentLength] = '\0';
+    return true;
+}
 
 uint16_t moodBackground() {
     switch (currentState) {
@@ -106,7 +173,7 @@ void drawMuteButton() {
 }
 
 void drawVoiceStatus() {
-    if (currentState == DUCK_WALK) {
+    if (currentState == DUCK_WALK || backendControlled) {
         return;
     }
 
@@ -128,6 +195,9 @@ void onVoiceStatus(const char* text) {
 
 void setDuckState(DuckState state) {
     currentState = state;
+    if (backendControlled && state == DUCK_HAPPY) {
+        voice.cancelHostAudio();
+    }
 
     if (state == DUCK_STRESSED) {
         stressedSinceMs = millis();
@@ -197,17 +267,117 @@ void setDuckState(DuckState state) {
     }
 
     voice.setIdleChatter(state == DUCK_HAPPY);
-    if (state == DUCK_STRESSED) {
+    if (state == DUCK_STRESSED && !backendControlled) {
         voice.sayStressed();
+    }
+    if (state == DUCK_WALK && backendControlled) {
+        voice.quack();
     }
 
     Serial.printf("Duck state set to: %d\n", static_cast<int>(state));
 }
 
+void applyHostResponse(const char* line) {
+    if (strncmp(line, "AUDIO|BEGIN=", 12) == 0 && backendControlled && currentState == DUCK_COOL) {
+        char* end = nullptr;
+        const unsigned long bytes = strtoul(line + 12, &end, 10);
+        if (end != line + 12 && *end == '\0' && voice.beginHostAudio(bytes)) {
+            Serial.println("ACK|AUDIO=0");
+        } else {
+            Serial.println("ACK|AUDIO=ERROR");
+        }
+        return;
+    }
+    if (strncmp(line, "AUDIO|DATA=", 11) == 0 && backendControlled && currentState == DUCK_COOL) {
+        const int received = voice.appendHostAudio(line + 11);
+        if (received >= 0) {
+            Serial.printf("ACK|AUDIO=%d\n", received);
+        } else {
+            voice.cancelHostAudio();
+            Serial.println("ACK|AUDIO=ERROR");
+        }
+        return;
+    }
+    if (strcmp(line, "AUDIO|END") == 0) {
+        if (!backendControlled || currentState != DUCK_COOL || !voice.finishHostAudio()) {
+            Serial.println("ACK|AUDIO=ERROR");
+        }
+        return;
+    }
+    if (strcmp(line, "AUDIO|CANCEL") == 0) {
+        voice.cancelHostAudio();
+        return;
+    }
+    DuckState requestedState = DUCK_HAPPY;
+    char parsedComment[HOST_COMMENT_MAX_LENGTH + 1] = {};
+    if (!parseHostResponse(line, requestedState, parsedComment)) {
+        return;
+    }
+
+    const bool firstHostResponse = !backendControlled;
+    backendControlled = true;
+    lastHostResponseMs = millis();
+    memcpy(hostComment, parsedComment, sizeof(hostComment));
+    voiceStatus = "";
+    if (firstHostResponse || requestedState != hostMood) {
+        setDuckState(requestedState);
+    }
+    hostMood = requestedState;
+    Serial.printf("ACK|MOOD=%s\n", wireMood(requestedState));
+}
+
+#ifndef NATIVE_BUILD
+void processHostSerial() {
+    while (Serial.available() > 0) {
+        const int next = Serial.read();
+        if (next < 0) {
+            return;
+        }
+
+        const char character = static_cast<char>(next);
+        if (character == '\n') {
+            if (!hostLineOverflow) {
+                hostLine[hostLineLength] = '\0';
+                applyHostResponse(hostLine);
+            }
+            hostLineLength = 0;
+            hostLineOverflow = false;
+            continue;
+        }
+        if (character == '\r') {
+            continue;
+        }
+        if (hostLineLength < HOST_LINE_BUFFER_SIZE) {
+            hostLine[hostLineLength++] = character;
+        } else {
+            hostLineOverflow = true;
+        }
+    }
+}
+
+void checkHostControlTimeout() {
+    const uint32_t now = millis();
+    if (!backendControlled || now - lastHostResponseMs <= HOST_RESPONSE_TIMEOUT_MS) {
+        return;
+    }
+
+    backendControlled = false;
+    hostMood = DUCK_HAPPY;
+    setDuckState(DUCK_HAPPY);
+    Serial.println("EVENT:HOST_TIMEOUT");
+}
+#else
+void processHostSerial() {}
+void checkHostControlTimeout() {}
+#endif
+
 void setup() {
     auto cfg = M5.config();
     M5.begin(cfg);
 
+#ifndef NATIVE_BUILD
+    Serial.setRxBufferSize(4096);
+#endif
     Serial.begin(115200);
 
     // Wipe any leftover UI from previous firmware before drawing our own.
@@ -251,19 +421,23 @@ void checkForPunch() {
     if (now - windowStartMs >= PUNCH_WINDOW_MS) {
         if (windowMaxMagnitude > PUNCH_ACCEL_THRESHOLD_G && (lastPunchMs == 0 || now - lastPunchMs > PUNCH_COOLDOWN_MS)) {
             lastPunchMs = now;
-            setDuckState(DUCK_STRESSED);
+            if (!backendControlled) {
+                setDuckState(DUCK_STRESSED);
+            }
             Serial.println("EVENT:FIST_SLAM");
         }
         windowMaxMagnitude = 0.0f;
         windowStartMs = now;
     }
 
-    if (currentState == DUCK_STRESSED && now - stressedSinceMs >= STRESSED_DURATION_MS && !voice.isSpeaking()) {
-        setDuckState(DUCK_WALK);
-    } else if (currentState == DUCK_WALK && now - walkingSinceMs >= WALK_DURATION_MS) {
-        setDuckState(DUCK_COOL);
-    } else if (currentState == DUCK_COOL && now - smartSinceMs >= SMART_DURATION_MS) {
-        setDuckState(DUCK_HAPPY);
+    if (!backendControlled) {
+        if (currentState == DUCK_STRESSED && now - stressedSinceMs >= STRESSED_DURATION_MS && !voice.isSpeaking()) {
+            setDuckState(DUCK_WALK);
+        } else if (currentState == DUCK_WALK && now - walkingSinceMs >= WALK_DURATION_MS) {
+            setDuckState(DUCK_COOL);
+        } else if (currentState == DUCK_COOL && now - smartSinceMs >= SMART_DURATION_MS) {
+            setDuckState(DUCK_HAPPY);
+        }
     }
 }
 
@@ -277,7 +451,14 @@ void updateWalking() {
     constexpr int32_t BACK_DISTANCE = WALK_RIGHT_X - WALK_LEFT_X;
     constexpr int32_t OUT_MS = WALK_DURATION_MS * OUT_DISTANCE / (OUT_DISTANCE + BACK_DISTANCE);
     constexpr int32_t BACK_MS = WALK_DURATION_MS - OUT_MS;
-    int32_t elapsed = static_cast<int32_t>(millis() - walkingSinceMs);
+    uint32_t walkingElapsed = millis() - walkingSinceMs;
+    if (backendControlled && walkingElapsed >= WALK_DURATION_MS) {
+        walkingSinceMs = millis();
+        walkReturning = false;
+        duckAnim.setFrames(duck_walk_frames, duck_walk_frame_count, WALK_FRAME_DELAY_MS);
+        walkingElapsed = 0;
+    }
+    int32_t elapsed = static_cast<int32_t>(walkingElapsed);
 
     if (elapsed < OUT_MS) {
         duckAnim.setPosition(DUCK_ANIM_X + OUT_DISTANCE * elapsed / OUT_MS);
@@ -297,6 +478,12 @@ void updateWalking() {
 
 void loop() {
     M5.update();
+    processHostSerial();
+    checkHostControlTimeout();
+    if (backendControlled && hostMood == DUCK_STRESSED && currentState == DUCK_STRESSED &&
+        millis() - stressedSinceMs >= STRESSED_DURATION_MS) {
+        setDuckState(DUCK_WALK);
+    }
 
 #ifdef NATIVE_BUILD
     int nativeBtn = nativeButtonPressed();

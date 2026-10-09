@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createServer, type Server, type Socket } from "node:net";
 import type { AgentActivity, AgentEditProposal, AgentResult } from "./agent-result.js";
 import type { OrchestratorState } from "./orchestrator.js";
+import type { DuckMood } from "./protocol.js";
 import type { AudioSessionStatus } from "./audio-server.js";
 
 const MAX_CONTEXT_EXCERPT = 8_000;
@@ -57,6 +58,7 @@ export interface BrokerProgress {
 export interface BrokerStatus {
   readonly state: OrchestratorState;
   readonly cooldownUntilMs: number;
+  readonly deviceMood?: DuckMood;
   readonly progress?: BrokerProgress;
   readonly lastResult?: AgentResult;
 }

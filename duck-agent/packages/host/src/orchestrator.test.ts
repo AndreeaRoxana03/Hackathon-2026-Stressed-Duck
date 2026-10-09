@@ -110,6 +110,113 @@ test("returns happy and cooldown on a failed run", async () => {
   assert.equal(await orchestrator.ingestLine("EVENT:FIST_SLAM\n"), false);
 });
 
+test("tracks the mood confirmed by the duck and clears it on timeout", async () => {
+  const transport = new FakeTransport();
+  const orchestrator = new DuckOrchestrator({
+    transport,
+    runner: { async run() { return { status: "success", comment: "Done." }; } },
+    smartHoldMs: 5000,
+    postRunCooldownMs: 3000,
+  });
+
+  await orchestrator.ingestLine("ACK|MOOD=STRESSED\n");
+  assert.equal(orchestrator.getStatus().deviceMood, "STRESSED");
+  await orchestrator.ingestLine("EVENT:HOST_TIMEOUT\n");
+  assert.equal(orchestrator.getStatus().deviceMood, undefined);
+});
+
+test("heartbeats the current mood after the broker handshake", async () => {
+  const transport = new FakeTransport();
+  const orchestrator = new DuckOrchestrator({
+    transport,
+    runner: { async run() { return { status: "success", comment: "Done." }; } },
+    smartHoldMs: 5000,
+    postRunCooldownMs: 3000,
+  });
+
+  await orchestrator.start();
+  await orchestrator.heartbeat();
+  assert.equal(transport.writes.at(-1), lineFor("HAPPY", "Ready."));
+});
+
+test("keeps smart mode through speech and starts the hold after playback", async () => {
+  const transport = new FakeTransport();
+  const scheduler = new FakeScheduler();
+  let finishSpeech: (() => void) | undefined;
+  let spoken = "";
+  const orchestrator = new DuckOrchestrator({
+    transport,
+    runner: { async run() { return { status: "success", comment: "Read the error next time." }; } },
+    speechOutput: { async speak(text) { spoken = text; await new Promise<void>((resolve) => { finishSpeech = resolve; }); } },
+    smartHoldMs: 5000,
+    postRunCooldownMs: 3000,
+    now: () => scheduler.nowMs,
+    scheduler,
+  });
+  const run = orchestrator.ingestLine("EVENT:FIST_SLAM");
+  for (let turn = 0; turn < 5; ++turn) { await Promise.resolve(); }
+  assert.equal(spoken, "Read the error next time.");
+  assert.equal(orchestrator.getStatus().state, "COOL");
+  await scheduler.advance(10000);
+  assert.equal(orchestrator.getStatus().state, "COOL");
+  finishSpeech?.();
+  assert.equal(await run, true);
+  await scheduler.advance(4999);
+  assert.equal(orchestrator.getStatus().state, "COOL");
+  await scheduler.advance(1);
+  assert.equal(orchestrator.getStatus().state, "HAPPY");
+});
+
+test("holds stressed before starting a configured physical investigation", async () => {
+  const transport = new FakeTransport();
+  const scheduler = new FakeScheduler();
+  let investigations = 0;
+  const orchestrator = new DuckOrchestrator({
+    transport,
+    runner: { async run() { investigations += 1; return { status: "success", comment: "Done." }; } },
+    stressedHoldMs: 10,
+    smartHoldMs: 5000,
+    postRunCooldownMs: 3000,
+    scheduler,
+  });
+  const run = orchestrator.ingestLine("EVENT:FIST_SLAM");
+  await Promise.resolve();
+  assert.equal(orchestrator.getStatus().state, "STRESSED");
+  assert.equal(investigations, 0);
+  assert.equal(await run, true);
+  assert.equal(investigations, 1);
+  await scheduler.advance(5000);
+});
+
+test("cancelling speech returns happy and does not schedule a late smart hold", async () => {
+  const transport = new FakeTransport();
+  const scheduler = new FakeScheduler();
+  let speechSignal: AbortSignal | undefined;
+  const orchestrator = new DuckOrchestrator({
+    transport,
+    runner: { async run() { return { status: "success", comment: "Result." }; } },
+    speechOutput: {
+      async speak(_text, signal) {
+        speechSignal = signal;
+        await new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("Stopped speech")), { once: true });
+        });
+      },
+    },
+    smartHoldMs: 5000,
+    postRunCooldownMs: 3000,
+    now: () => scheduler.nowMs,
+    scheduler,
+  });
+  const run = orchestrator.ingestLine("EVENT:FIST_SLAM");
+  for (let turn = 0; turn < 5; ++turn) { await Promise.resolve(); }
+  assert.equal(await orchestrator.cancel(), true);
+  assert.equal(speechSignal?.aborted, true);
+  assert.equal(await run, false);
+  await scheduler.advance(10000);
+  assert.equal(orchestrator.getStatus().state, "HAPPY");
+});
+
 test("cancels immediately, rejects late success, and preserves post-abort cooldown", async () => {
   const transport = new FakeTransport();
   const scheduler = new FakeScheduler();

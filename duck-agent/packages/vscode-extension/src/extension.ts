@@ -68,7 +68,7 @@ interface BrokerResponse {
   readonly ok: boolean;
   readonly protocolVersion?: number;
   readonly accepted?: boolean;
-  readonly status?: { readonly state: string; readonly cooldownUntilMs: number; readonly progress?: BrokerProgress; readonly lastResult?: AgentResult };
+  readonly status?: { readonly state: string; readonly cooldownUntilMs: number; readonly deviceMood?: string; readonly progress?: BrokerProgress; readonly lastResult?: AgentResult };
   readonly result?: AgentResult;
   readonly proposal?: AgentEditProposal;
   readonly error?: string;
@@ -594,7 +594,7 @@ async function showBrokerResult(
   }
   output.appendLine(
     `Broker response: ${response.accepted === undefined ? "ok" : response.accepted ? "accepted" : "busy"}${
-      response.status ? `, state=${response.status.state}` : ""
+      response.status ? `, state=${response.status.state}, duck=${response.status.deviceMood ?? "unconfirmed"}` : ""
     }`,
   );
   if (response.result) {
@@ -638,6 +638,7 @@ export function activate(context: vscode.ExtensionContext): void {
   let lastShownGeneration: number | undefined;
   let lastSpeechState: string | undefined;
   let lastProgressKey: string | undefined;
+  let lastConnectionError: string | undefined;
   let clarificationContext: EditorContext | undefined;
   let capturing = false;
   let resultPanel: ResultPanelController | undefined;
@@ -725,6 +726,13 @@ export function activate(context: vscode.ExtensionContext): void {
     pollInFlight = true;
     try {
       const response = await requestBroker("poll", { windowId, focused: vscode.window.state.focused, trusted: vscode.workspace.isTrusted });
+      if (!response.ok) {
+        throw new Error(response.error ?? "Broker rejected window registration.");
+      }
+      if (lastConnectionError) {
+        output.appendLine("Broker connection restored; editor window registered.");
+        lastConnectionError = undefined;
+      }
       const progress = response.status?.progress;
       if ((pendingRun || capturing) && progress) {
         const progressKey = JSON.stringify(progress);
@@ -753,7 +761,12 @@ export function activate(context: vscode.ExtensionContext): void {
       if (response.error) {
         output.appendLine(response.error);
       }
-    } catch {
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      if (detail !== lastConnectionError) {
+        lastConnectionError = detail;
+        output.appendLine(`Broker connection failed: ${detail}`);
+      }
       if (pendingRun) {
         pendingRun.stopped = true;
       }

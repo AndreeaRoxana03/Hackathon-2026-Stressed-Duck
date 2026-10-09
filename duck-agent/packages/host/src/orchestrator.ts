@@ -1,6 +1,8 @@
 import { encodeDuckResponse, parseFirmwareLine, type DuckMood } from "./protocol.js";
 import type { AgentEditProposal, AgentResult, AgentRunStatus } from "./agent-result.js";
 import type { SerialTransport } from "./serial.js";
+import type { SpeechOutput } from "./speech.js";
+import { setTimeout as wait } from "node:timers/promises";
 
 export type AgentOutcomeStatus = AgentRunStatus;
 
@@ -45,6 +47,9 @@ export interface DuckOrchestratorOptions {
   readonly postRunCooldownMs: number;
   readonly now?: () => number;
   readonly scheduler?: OrchestratorScheduler;
+  readonly stressedHoldMs?: number;
+  readonly speechOutput?: SpeechOutput;
+  readonly onSpeechError?: (error: unknown) => void;
 }
 
 export class DuckOrchestrator {
@@ -58,6 +63,9 @@ export class DuckOrchestrator {
   private smartTimer: unknown = null;
   private unsubscribe: (() => void) | null = null;
   private lastOutcome: AgentOutcome | undefined;
+  private deviceMood: DuckMood | undefined;
+  private lastComment = "Ready.";
+  private started = false;
 
   public constructor(private readonly options: DuckOrchestratorOptions) {
     this.now = options.now ?? Date.now;
@@ -67,11 +75,13 @@ export class DuckOrchestrator {
   public getStatus(): {
     readonly state: OrchestratorState;
     readonly cooldownUntilMs: number;
+    readonly deviceMood?: DuckMood;
     readonly lastResult?: AgentResult;
   } {
     return {
       state: this.state,
       cooldownUntilMs: this.cooldownUntilMs,
+      ...(this.deviceMood ? { deviceMood: this.deviceMood } : {}),
       ...(this.lastOutcome?.result ? { lastResult: this.lastOutcome.result } : {}),
     };
   }
@@ -88,13 +98,23 @@ export class DuckOrchestrator {
     if (this.unsubscribe !== null) {
       return;
     }
+    this.started = true;
     this.unsubscribe = this.options.transport.onLine((line) => {
       void this.ingestLine(line);
     });
     await this.send("HAPPY", "Ready.");
   }
 
+  public async heartbeat(): Promise<void> {
+    if (!this.started) {
+      return;
+    }
+    const mood: DuckMood = this.state === "COOLDOWN" ? "HAPPY" : this.state;
+    await this.send(mood, this.lastComment);
+  }
+
   public async stop(): Promise<void> {
+    this.started = false;
     this.generation += 1;
     this.activeController?.abort();
     this.activeController = null;
@@ -108,6 +128,10 @@ export class DuckOrchestrator {
     this.state = "HAPPY";
     this.cooldownUntilMs = this.now() + this.options.postRunCooldownMs;
     await this.send("HAPPY", "Stopped.");
+  }
+
+  public markDeviceDisconnected(): void {
+    this.deviceMood = undefined;
   }
 
   public async cancel(comment = DEFAULT_ABORT_COMMENT): Promise<boolean> {
@@ -126,7 +150,16 @@ export class DuckOrchestrator {
   }
 
   public async ingestLine(line: string): Promise<boolean> {
-    if (parseFirmwareLine(line) === null) {
+    const event = parseFirmwareLine(line);
+    if (event === null) {
+      return false;
+    }
+    if (event.type === "DUCK_ACK") {
+      this.deviceMood = event.mood;
+      return false;
+    }
+    if (event.type === "HOST_TIMEOUT") {
+      this.deviceMood = undefined;
       return false;
     }
     return this.handleFistSlam();
@@ -156,6 +189,9 @@ export class DuckOrchestrator {
 
     try {
       await this.send("STRESSED", DEFAULT_WORKING_COMMENT);
+      if (this.options.stressedHoldMs) {
+        await wait(this.options.stressedHoldMs, undefined, { signal: controller.signal });
+      }
       const outcome = await this.options.runner.run({ generation, signal: controller.signal });
       if (this.activeController?.signal !== controller.signal || generation !== this.generation) {
         return false;
@@ -163,7 +199,7 @@ export class DuckOrchestrator {
       this.lastOutcome = outcome;
 
       if (outcome.status === "success") {
-        await this.finishSuccessfully(outcome.comment);
+        await this.finishSuccessfully(outcome.comment, controller.signal);
       } else {
         await this.finishImmediately(outcome.comment || DEFAULT_FAILURE_COMMENT);
       }
@@ -177,12 +213,22 @@ export class DuckOrchestrator {
       }
     }
 
-    return true;
+    return generation === this.generation;
   }
 
-  private async finishSuccessfully(comment: string): Promise<void> {
+  private async finishSuccessfully(comment: string, signal: AbortSignal): Promise<void> {
     this.state = "COOL";
     await this.send("COOL", comment);
+    signal.throwIfAborted();
+    if (this.options.speechOutput) {
+      try {
+        await this.options.speechOutput.speak(comment, signal);
+      } catch (error) {
+        signal.throwIfAborted();
+        this.options.onSpeechError?.(error);
+      }
+    }
+    signal.throwIfAborted();
     this.activeController = null;
     this.smartTimer = this.scheduler.set(this.options.smartHoldMs, () => {
       void this.returnToHappy();
@@ -215,6 +261,7 @@ export class DuckOrchestrator {
   }
 
   private async send(mood: DuckMood, comment: string): Promise<void> {
+    this.lastComment = comment;
     await this.options.transport.write(encodeDuckResponse({ mood, comment }));
   }
 }

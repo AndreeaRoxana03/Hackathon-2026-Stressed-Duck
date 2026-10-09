@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { fitComment } from "./protocol.js";
+import type { SerialTransport } from "./serial.js";
 
 const MAX_AUDIO_BYTES = 1_048_576;
 const MAX_AUDIO_SECONDS = 20;
@@ -75,6 +77,79 @@ export class WindowsSpeechOutput implements SpeechOutput {
 
 export function createSpeechOutput(environment: NodeJS.ProcessEnv = process.env): SpeechOutput | undefined {
   return environment.DUCK_SPEECH === "1" ? new WindowsSpeechOutput() : undefined;
+}
+
+export async function synthesizeDuckSpeech(text: string, signal?: AbortSignal): Promise<Buffer> {
+  if (process.platform !== "win32") {
+    throw new Error("Duck speech synthesis requires Windows System.Speech.");
+  }
+  const boundedSignal = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(30_000)]);
+  boundedSignal.throwIfAborted();
+  const encodedText = Buffer.from(fitComment(text), "utf8").toString("base64");
+  const output = await runPowerShell(
+    `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Speech; $text=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedText}')); $speaker=New-Object System.Speech.Synthesis.SpeechSynthesizer; $stream=New-Object IO.MemoryStream; try { $format=New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(16000,[System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen,[System.Speech.AudioFormat.AudioChannel]::Mono); $speaker.Rate=2; $speaker.SetOutputToAudioStream($stream,$format); $speaker.Speak($text); [Convert]::ToBase64String($stream.ToArray()) } finally { $speaker.Dispose(); $stream.Dispose() }`,
+    boundedSignal,
+  );
+  const audio = Buffer.from(output, "base64");
+  if (audio.length === 0 || audio.length % 2 !== 0 || audio.length > 22050 * 12 * 2) {
+    throw new Error("Synthesized duck speech exceeds the device PCM buffer or is empty.");
+  }
+  return audio;
+}
+
+export class SerialSpeechOutput implements SpeechOutput {
+  public constructor(
+    private readonly transport: Pick<SerialTransport, "write" | "onLine" | "onDisconnect">,
+    private readonly synthesize = synthesizeDuckSpeech,
+  ) {}
+
+  public async speak(text: string, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    const audio = await this.synthesize(text, signal);
+    if (audio.length === 0 || audio.length % 2 !== 0 || audio.length > 22050 * 12 * 2) {
+      throw new Error("Invalid duck PCM audio length.");
+    }
+    try {
+      await this.exchange(`AUDIO|BEGIN=${audio.length}\n`, "0", 3_000, signal);
+      for (let offset = 0; offset < audio.length; offset += 64) {
+        const chunk = audio.subarray(offset, offset + 64);
+        await this.exchange(`AUDIO|DATA=${chunk.toString("hex")}\n`, String(offset + chunk.length), 3_000, signal);
+      }
+      await this.exchange("AUDIO|END\n", "DONE", audio.length / 32 + 5_000, signal);
+    } catch (error) {
+      await this.transport.write("AUDIO|CANCEL\n").catch(() => {});
+      throw error;
+    }
+  }
+
+  private exchange(line: string, expected: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let unsubscribe = () => {};
+      let unsubscribeDisconnect = () => {};
+      const finish = (error?: Error) => {
+        if (settled) { return; }
+        settled = true;
+        clearTimeout(timer);
+        unsubscribe();
+        unsubscribeDisconnect();
+        signal?.removeEventListener("abort", abort);
+        if (error) { reject(error); } else { resolve(); }
+      };
+      const abort = () => finish(abortError());
+      const timer = setTimeout(() => finish(new Error("Timed out waiting for duck audio acknowledgement.")), timeoutMs);
+      unsubscribe = this.transport.onLine((response) => {
+        const ack = response.replace(/[\r\n]+$/g, "");
+        if (ack === `ACK|AUDIO=${expected}`) { finish(); }
+        else if (ack === "ACK|AUDIO=ERROR") { finish(new Error(`The duck rejected the audio transfer while awaiting ${expected}.`)); }
+      });
+      unsubscribeDisconnect = this.transport.onDisconnect?.(() => finish(new Error("Duck disconnected during speech."))) ?? (() => {});
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) { abort(); return; }
+      void this.transport.write(line).catch((error: Error) => finish(error));
+    });
+  }
 }
 
 function uint16(view: DataView, offset: number): number {

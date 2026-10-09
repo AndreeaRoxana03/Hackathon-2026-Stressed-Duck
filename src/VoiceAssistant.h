@@ -12,6 +12,11 @@ public:
     void update(bool = false) {}
     void sayStressed() {}
     void sayHappy() {}
+    void quack() {}
+    bool beginHostAudio(size_t) { return false; }
+    int appendHostAudio(const char*) { return -1; }
+    bool finishHostAudio() { return false; }
+    void cancelHostAudio() {}
     void setIdleChatter(bool) {}
     void setMuted(bool muted) { _muted = muted; }
     bool isMuted() const { return _muted; }
@@ -36,8 +41,12 @@ public:
     void sayStressed();
     // Speaks a random line from the [happy] section without needing a touch.
     void sayHappy();
-    // Enabled only in the happy state: speaks a random [happy] line every 20-60 s and a [touch] line on each
-    // screen touch. While disabled, touches are ignored.
+    void quack();
+    bool beginHostAudio(size_t bytes);
+    int appendHostAudio(const char* hex);
+    bool finishHostAudio();
+    void cancelHostAudio();
+    // While enabled, speaks a random [happy] line every 20-60 s when nothing else is being said.
     void setIdleChatter(bool enabled);
     // While muted nothing is spoken and any clip in progress is cut off.
     void setMuted(bool muted);
@@ -62,6 +71,10 @@ private:
     bool _muted = false;
     uint32_t _nextChatterMs = 0;
     bool _speaking = false;
+    bool _hostAudioReceiving = false;
+    bool _hostAudioPlaying = false;
+    size_t _hostAudioBytes = 0;
+    size_t _hostAudioReceived = 0;
 };
 
 #endif

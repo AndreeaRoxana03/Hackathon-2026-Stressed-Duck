@@ -9,6 +9,17 @@ export interface FistSlamEvent {
   readonly type: "FIST_SLAM";
 }
 
+export interface DuckAckEvent {
+  readonly type: "DUCK_ACK";
+  readonly mood: DuckMood;
+}
+
+export interface DuckHostTimeoutEvent {
+  readonly type: "HOST_TIMEOUT";
+}
+
+export type FirmwareEvent = FistSlamEvent | DuckAckEvent | DuckHostTimeoutEvent;
+
 export interface DuckResponseLine {
   readonly type: "DUCK_RESPONSE";
   readonly mood: DuckMood;
@@ -26,15 +37,31 @@ export interface DuckResponse {
 
 const COMMENT_FALLBACK = "Details are in your editor.";
 
-export function parseFirmwareLine(line: string): FistSlamEvent | null {
+export function parseFirmwareLine(line: string): FirmwareEvent | null {
   const withoutTerminator = line.replace(/[\r\n]+$/g, "");
-  return withoutTerminator === "EVENT:FIST_SLAM" ? { type: "FIST_SLAM" } : null;
+  if (Buffer.byteLength(withoutTerminator, "utf8") > MAX_SERIAL_LINE_BYTES) {
+    return null;
+  }
+  if (withoutTerminator === "EVENT:FIST_SLAM") {
+    return { type: "FIST_SLAM" };
+  }
+  if (withoutTerminator === "EVENT:HOST_TIMEOUT") {
+    return { type: "HOST_TIMEOUT" };
+  }
+  const ack = withoutTerminator.match(/^ACK\|MOOD=(HAPPY|STRESSED|COOL)$/);
+  return ack ? { type: "DUCK_ACK", mood: ack[1] as DuckMood } : null;
 }
 
 export function parseDuckResponseLine(line: string): DuckResponseLine | null {
   const withoutTerminator = line.replace(/[\r\n]+$/g, "");
+  if (Buffer.byteLength(withoutTerminator, "utf8") > MAX_SERIAL_LINE_BYTES) {
+    return null;
+  }
   const match = withoutTerminator.match(/^RESP\|MOOD=(HAPPY|STRESSED|COOL)\|COMMENT=([^|]*)\|FIX=\|EXPLAIN=$/);
   if (!match) {
+    return null;
+  }
+  if ((match[2] ?? "").length > MAX_COMMENT_LENGTH) {
     return null;
   }
   return {

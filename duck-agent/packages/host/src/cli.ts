@@ -21,7 +21,7 @@ import { WorkspaceToolHost } from "./workspace-tools.js";
 import { readFile } from "node:fs/promises";
 import { FocusedWindowRouter } from "./window-router.js";
 import { ClarificationSessions, DuckAudioServer } from "./audio-server.js";
-import { OpenAICompatibleTranscriber } from "./speech.js";
+import { OpenAICompatibleTranscriber, SerialSpeechOutput } from "./speech.js";
 import { parseFirmwareLine } from "./protocol.js";
 import type { AgentActivity } from "./agent-result.js";
 
@@ -138,11 +138,15 @@ async function runLive(): Promise<void> {
   });
 
   let stopped = false;
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   const stop = async () => {
     if (stopped) {
       return;
     }
     stopped = true;
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+    }
     await orchestrator.stop();
     await transport.close();
   };
@@ -150,6 +154,9 @@ async function runLive(): Promise<void> {
   process.once("SIGTERM", () => void stop().finally(() => process.exit(0)));
 
   await orchestrator.start();
+  heartbeatTimer = setInterval(() => {
+    void orchestrator.heartbeat().catch(() => {});
+  }, 2_000);
   console.log(`Live broker connected to ${device.path}. Press Ctrl+C to stop.`);
   await new Promise<void>(() => {});
 }
@@ -327,6 +334,11 @@ async function runBroker(): Promise<void> {
     runner: agentRunner,
     smartHoldMs: runtime.config.runtime.smartHoldMs,
     postRunCooldownMs: runtime.config.runtime.postRunCooldownMs,
+    ...(process.env.DUCK_MOCK_DUCK === "0" ? {
+      stressedHoldMs: 3_000,
+      speechOutput: new SerialSpeechOutput(transport),
+      onSpeechError: (error: unknown) => console.error(`Duck speaker: ${error instanceof Error ? error.message : "Speech failed."}`),
+    } : {}),
   });
   const currentStatus = () => ({
     ...orchestrator.getStatus(),
@@ -440,12 +452,17 @@ async function runBroker(): Promise<void> {
     },
   });
 
-  await orchestrator.start();
-  await server.start();
-  await audioServer?.start();
   const unsubscribeHardware = transport.onLine((line) => {
+    const event = parseFirmwareLine(line);
+    if (!event) {
+      return;
+    }
+    if (event.type !== "FIST_SLAM") {
+      void orchestrator.ingestLine(line).catch(() => {});
+      return;
+    }
     const speechState = sessions?.getStatus()?.state;
-    if (parseFirmwareLine(line) && !triggerPending && orchestrator.canTrigger() && !pendingTranscript && (!speechState || ["complete", "cancelled"].includes(speechState))) {
+    if (!triggerPending && orchestrator.canTrigger() && !pendingTranscript && (!speechState || ["complete", "cancelled"].includes(speechState))) {
       if (windows.requestContext()) {
         console.log("FIST_SLAM detected; requesting fresh context from the focused VS Code window.");
       } else {
@@ -453,13 +470,18 @@ async function runBroker(): Promise<void> {
       }
     }
   });
+  await orchestrator.start();
+  await server.start();
+  await audioServer?.start();
   const unsubscribeDisconnect = transport.onDisconnect?.(() => {
+    orchestrator.markDeviceDisconnected();
     sessions?.cancel();
     pendingTranscript = undefined;
     windows.clear();
     void orchestrator.cancel("Serial device disconnected.").catch(() => {});
   });
   const heartbeatTimer = setInterval(() => {
+    void orchestrator.heartbeat().catch(() => {});
     if (originWindow && !windows.isAlive(originWindow)) {
       sessions?.cancel();
       pendingTranscript = undefined;
