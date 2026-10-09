@@ -12,6 +12,7 @@ constexpr size_t PCM_CAPACITY = 22050 * 12;  // samples
 constexpr uint8_t SPEAKER_VOLUME = 220;
 
 const char* const IDLE_STATUS = "Touch to hear the duck";
+const char* const MUTED_STATUS = "Sound off";
 
 uint32_t readU32(const uint8_t* p) {
     uint32_t value;
@@ -105,7 +106,7 @@ void VoiceAssistant::begin(StatusCallback onStatus) {
     setStatus(IDLE_STATUS);
 }
 
-void VoiceAssistant::update() {
+void VoiceAssistant::update(bool touchConsumed) {
     if (!_pcm[0] || !_pcm[1]) {
         return;
     }
@@ -133,7 +134,7 @@ void VoiceAssistant::update() {
         return;
     }
 
-    if (M5.Touch.getDetail(0).wasPressed()) {
+    if (_chatter && !touchConsumed && M5.Touch.getDetail(0).wasPressed()) {
         scheduleChatter();
         speakRandom(GROUP_TOUCH, _lastTouch);
     }
@@ -244,8 +245,17 @@ void VoiceAssistant::speakRandom(uint32_t group, size_t& lastIndex) {
     speakClip(group, pick);
 }
 
+void VoiceAssistant::setMuted(bool muted) {
+    _muted = muted;
+    if (muted) {
+        M5.Speaker.stop();
+        _speaking = false;
+    }
+    setStatus(muted ? MUTED_STATUS : IDLE_STATUS);
+}
+
 void VoiceAssistant::speakClip(uint32_t group, size_t index) {
-    if (!_pcm[0] || !_pcm[1]) {
+    if (_muted || !_pcm[0] || !_pcm[1]) {
         return;
     }
     const uint8_t* samples = nullptr;
@@ -270,7 +280,8 @@ void VoiceAssistant::speakClip(uint32_t group, size_t index) {
                   static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getFreePsram()));
 
     setStatus("Speaking...");
-    M5.Speaker.playRaw(pcm, count, rate, false, 1, -1, true);
+    // A fixed channel makes stop_current cut off the previous clip; channel -1 would mix it on a free channel.
+    M5.Speaker.playRaw(pcm, count, rate, false, 1, 0, true);
     _speaking = true;
 }
 

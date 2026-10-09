@@ -37,6 +37,13 @@ constexpr int16_t WALK_RIGHT_X = SCREEN_WIDTH;
 constexpr int16_t STATUS_Y = 46;
 constexpr int16_t STATUS_H = 22;
 
+// Mute button in the top-right corner; the touch area is a bit larger than the drawn icon.
+constexpr int16_t MUTE_X = 272;
+constexpr int16_t MUTE_Y = 4;
+constexpr int16_t MUTE_SIZE = 40;
+constexpr int16_t MUTE_HIT_X = 264;
+constexpr int16_t MUTE_HIT_BOTTOM = 48;
+
 // Table-punch detection: accel magnitude spike above resting ~1g, with a cooldown to avoid retriggering.
 // Punching the table (not the device) transmits an attenuated shock, so this starts lower than a direct-hit
 // threshold would be -- watch the Serial Monitor (DEBUG prints below) and raise/lower to match real readings.
@@ -124,19 +131,54 @@ bool parseHostResponse(const char* line, DuckState& state, char* comment) {
     return true;
 }
 
+uint16_t moodBackground() {
+    switch (currentState) {
+        case DUCK_HAPPY:
+            return HAPPY_BACKGROUND;
+        case DUCK_STRESSED:
+        case DUCK_WALK:
+            return STRESSED_BACKGROUND;
+        default:
+            return SMART_BACKGROUND;
+    }
+}
+
+uint16_t moodForeground() {
+    return currentState == DUCK_HAPPY ? TFT_BLACK : TFT_WHITE;
+}
+
+void drawMuteButton() {
+    auto &lcd = M5.Display;
+    const uint16_t background = moodBackground();
+    const uint16_t foreground = moodForeground();
+    const int16_t x = MUTE_X;
+    const int16_t y = MUTE_Y;
+
+    lcd.fillRect(x - 4, y - 4, MUTE_SIZE + 8, MUTE_SIZE + 8, background);
+    lcd.drawRoundRect(x, y, MUTE_SIZE, MUTE_SIZE, 6, foreground);
+    lcd.fillRect(x + 7, y + 15, 7, 10, foreground);
+    lcd.fillTriangle(x + 14, y + 15, x + 23, y + 8, x + 23, y + 32, foreground);
+    lcd.fillTriangle(x + 14, y + 15, x + 14, y + 25, x + 23, y + 32, foreground);
+    if (voice.isMuted()) {
+        for (int16_t dy = 0; dy < 2; ++dy) {
+            lcd.drawLine(x + 26, y + 14 + dy, x + 35, y + 26 + dy, TFT_RED);
+            lcd.drawLine(x + 35, y + 14 + dy, x + 26, y + 26 + dy, TFT_RED);
+        }
+    } else {
+        lcd.drawFastVLine(x + 28, y + 14, 12, foreground);
+        lcd.drawFastVLine(x + 29, y + 14, 12, foreground);
+        lcd.drawFastVLine(x + 33, y + 10, 20, foreground);
+        lcd.drawFastVLine(x + 34, y + 10, 20, foreground);
+    }
+}
+
 void drawVoiceStatus() {
     if (currentState == DUCK_WALK || backendControlled) {
         return;
     }
 
-    uint16_t background = SMART_BACKGROUND;
-    uint16_t foreground = TFT_WHITE;
-    if (currentState == DUCK_HAPPY) {
-        background = HAPPY_BACKGROUND;
-        foreground = TFT_BLACK;
-    } else if (currentState == DUCK_STRESSED || currentState == DUCK_WALK) {
-        background = STRESSED_BACKGROUND;
-    }
+    const uint16_t background = moodBackground();
+    const uint16_t foreground = moodForeground();
 
     auto &lcd = M5.Display;
     lcd.fillRect(0, STATUS_Y, 320, STATUS_H, background);
@@ -218,6 +260,7 @@ void setDuckState(DuckState state) {
 
     lcd.endWrite();
 
+    drawMuteButton();
     duckAnim.snapTo(DUCK_ANIM_X);
     if (state != DUCK_WALK) {
         drawVoiceStatus();
@@ -463,7 +506,15 @@ void loop() {
 
     checkForPunch();
     updateWalking();
-    voice.update();
+
+    bool touchConsumed = false;
+    const auto touch = M5.Touch.getDetail(0);
+    if (touch.wasPressed() && touch.x >= MUTE_HIT_X && touch.y <= MUTE_HIT_BOTTOM) {
+        voice.setMuted(!voice.isMuted());
+        drawMuteButton();
+        touchConsumed = true;
+    }
+    voice.update(touchConsumed);
 
     // Image decoding would starve the mic queue, so the duck holds still while recording.
     if (!voice.isRecording()) {
